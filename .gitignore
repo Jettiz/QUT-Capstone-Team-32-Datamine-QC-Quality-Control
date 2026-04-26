@@ -1,0 +1,24 @@
+# Jupyter
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files - keep local only
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.jsonl
+
+# Optional: keep folder structure tracked
+!data/
+!data/raw/
+!data/processed/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
