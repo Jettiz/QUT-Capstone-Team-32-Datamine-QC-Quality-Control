@@ -36,3 +36,10 @@ for example
 > visualiser.py
 
 Note: all names and data should be consistent with Standard Australian English spelling conventions. 
+
+
+## Pull Requests
+
+Pull request and branches should be
+<YYYY>_<MM>_<DD>_<Branch>
+> 2026_07_08_ChangingLogic
