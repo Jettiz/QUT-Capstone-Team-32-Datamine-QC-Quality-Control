@@ -27,12 +27,12 @@ For the moment, there isn't executables until further on in the project.
 ## File Naming:
 
 Files should usually start with (If tag is applicable)
-> <SAMPLETYPE>_<attribute>_<tags>.filetype
+> \<SAMPLETYPE>\_\<attribute>\_\<tags>\.filetype
 
 
 for example
-> MATRIX_visualize.py
-> DATA_loader
+> MATRIX\_visualize.py
+> DATA\_loader
 > visualiser.py
 
 Note: all names and data should be consistent with Standard Australian English spelling conventions. 
@@ -41,5 +41,5 @@ Note: all names and data should be consistent with Standard Australian English s
 ## Pull Requests
 
 Pull request and branches should be
-<YYYY>_<MM>_<DD>_<Branch>
-> 2026_07_08_ChangingLogic
+\<YYYY>\_\<MM>\_\<DD>\_\<Branch>
+> 2026\_07\_08\_ChangingLogic
