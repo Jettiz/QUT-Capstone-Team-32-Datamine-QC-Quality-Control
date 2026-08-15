@@ -21,4 +21,7 @@ Thumbs.db
 !data/raw/
 !data/processed/
 !data/raw/.gitkeep
-!data/processed/.gitkeep
+!data/processed/.git
+
+# Local notebook development / scratch files
+notebooks/local/
