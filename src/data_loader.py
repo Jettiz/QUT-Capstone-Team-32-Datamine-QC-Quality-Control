@@ -185,8 +185,9 @@ def _apply_dtypes(df: pd.DataFrame, config: pd.DataFrame) -> pd.DataFrame:
             )
 
     return df
+
 qc_data = load_qc_data(
-    data_path="../data/raw/ResultSet.csv",
+    data_path="data/raw/ResultSet.csv",
     config_path="src/config/column_config.csv"
 )
 
@@ -200,6 +201,3 @@ print(qc_data.info())
 # Display the DataFrame dimensions (rows, columns)
 print(qc_data.shape)
 
-df = pd.read_csv("data/QC_Sample_Data.csv", nrows=5)
-
-print(df.columns.tolist())
