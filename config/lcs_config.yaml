@@ -1,1 +1,25 @@
-# sdsjhbAJJODFJFBNKJ
+# LCS (Laboratory Control Sample) Anomaly Detection Configuration
+
+# Known target/reference value for the control
+target_value: 100.0
+
+# Acceptable range around target (units depend on your data)
+tolerance_window: 10.0  # ±10% or ±10 units
+
+# Maximum acceptable variance before flagging
+max_variance: 25.0
+
+# Maximum acceptable drift rate per sample
+drift_rate_threshold: 0.5
+
+# Sensitivity level: "high", "medium", or "low"
+sensitivity: "medium"
+
+# Threshold confidence to trigger detection (0-100)
+confidence_threshold: 75
+
+# Minimum samples needed for trend detection
+min_samples_for_trend: 15
+
+# Enable/disable this detector
+enabled: true
