@@ -1,5 +1,5 @@
 """
-Control (Laboratory Control Sample) Anomaly Detector
+LCS (Laboratory Control Sample) Anomaly Detector
 
 Detects deviations in control samples that verify method accuracy and stability
 using a clean, well-defined matrix with known analyte concentrations.
@@ -35,9 +35,9 @@ from typing import Dict, Any, Tuple, Optional
 import yaml
 
 
-class ControlDetector:
+class LCSDetector:
     """
-    Detect anomalies in Control (Laboratory Control Sample) data.
+    Detect anomalies in LCS (Laboratory Control Sample) data.
 
     Method: Normalized Deviation with Rolling Mean
     - Normalizes measurements against warning bounds
