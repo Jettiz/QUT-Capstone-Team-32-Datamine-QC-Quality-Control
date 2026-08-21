@@ -318,7 +318,7 @@ def _apply_dtypes(df: pd.DataFrame, config: pd.DataFrame) -> pd.DataFrame:
 
 qc_data = load_qc_data(
     data_path="data/raw/ResultSet.csv",
-    config_path="src/config/column_config.csv",
+    config_path="./config/column_config.csv",
     supplementary_path="data/raw/QC_Anomaly_Training_Data_v2.xlsx"
 )
 
@@ -330,3 +330,12 @@ print(qc_data.info())
 
 # Display the DataFrame dimensions (rows, columns)
 print(qc_data.shape)
+
+# See Matrix Spike rows
+print(qc_data[qc_data["analytical_type"] == "Spike"].head())
+
+# See all sample type counts
+print(qc_data["analytical_type"].value_counts())
+
+# See the last 5 rows (where appended data sits)
+print(qc_data.tail())
