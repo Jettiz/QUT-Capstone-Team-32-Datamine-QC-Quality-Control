@@ -1,0 +1,21 @@
+srms:
+  warning_margin_pct: 0.10
+  robust_z_threshold: 3.5
+  strong_robust_z_threshold: 4.5
+
+  historical:
+    sheet: "GO_FAA50V10 Asssessment"
+    rolling_window: 5
+    min_history: 5
+
+  isolation_forest:
+    min_history: 20
+    contamination: 0.05
+    n_estimators: 250
+    random_state: 42
+
+  drift:
+    min_history: 5
+    slope_pct_threshold: 0.5
+    mean_shift_pct_threshold: 1.0
+    consecutive_points: 4
