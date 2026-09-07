@@ -24,11 +24,13 @@ from pathlib import Path
 
 import pandas as pd
 
-# Columns required by LCSDetector.detect()/detect_drift(), with the dtype
-# category each must satisfy (see lcs_detector.py required_cols).
+# Columns required by LCSDetector.detect(), with the dtype category each
+# must satisfy (see control_detector.py's historic-drift pipeline).
 _LCS_REQUIRED_COLUMNS = {
     "ANALYTICAL_TYPE": "str",
     "STD_LOT_CODE": "str",
+    "STD_CODE": "str",
+    "SCHEME_CODE": "str",
     "JOB_CODE": "str",
     "ANALYTE_CODE": "str",
     "ANALYSED_DATE": "datetime",
@@ -37,6 +39,10 @@ _LCS_REQUIRED_COLUMNS = {
     "INTERNAL_MAX_WARNING_VALUE": "float",
     "INTERNAL_MIN_WARNING_VALUE": "float",
 }
+
+# STD_CODE values that are not genuine reference-material identifiers (same
+# list used by LCSDetector's history grouping and by notebooks/SRMS_LOGIC.md).
+_LCS_EXCLUDED_STD_CODES = {"", "Sample", "TSV_BLANK"}
 
 
 def validate_structure(df: pd.DataFrame, config_dir: str = "config/") -> bool:
@@ -93,7 +99,10 @@ def validate_lcs_data(df: pd.DataFrame) -> dict:
     Validate LCS (Control) data ahead of LCSDetector.
 
     1. Filters df to the Control/LCS subset: ANALYTICAL_TYPE == "Standard"
-       and STD_LOT_CODE == "Sample" (same rule as check_classifier's "lcs" check).
+       with a genuine STD_CODE (excludes blank/"Sample"/"TSV_BLANK" --
+       STD_LOT_CODE == "Sample" is a labelling quirk of STD_CODE ==
+       "OREAS_502C", not a distinct category; see
+       notebooks/LCS_drift_detection_historic.ipynb's design doc).
     2. For each column LCSDetector requires, checks the subset has no
        missing (null) values and the column's dtype matches what the
        detector expects (str / float / datetime).
@@ -101,14 +110,15 @@ def validate_lcs_data(df: pd.DataFrame) -> dict:
     print(f"[DataValidator] -- LCS (Control) data validation " + "-" * 40)
 
     missing_columns = [c for c in _LCS_REQUIRED_COLUMNS if c not in df.columns]
-    if "ANALYTICAL_TYPE" in df.columns and "STD_LOT_CODE" in df.columns:
+    if "ANALYTICAL_TYPE" in df.columns and "STD_CODE" in df.columns:
+        std_code = df["STD_CODE"].fillna("").astype(str).str.strip()
         control_df = df[
-            (df["ANALYTICAL_TYPE"] == "Standard") & (df["STD_LOT_CODE"] == "Sample")
+            (df["ANALYTICAL_TYPE"] == "Standard") & (~std_code.isin(_LCS_EXCLUDED_STD_CODES))
         ]
     else:
         control_df = df.iloc[0:0]
 
-    print(f"  Control/LCS rows (ANALYTICAL_TYPE=='Standard' & STD_LOT_CODE=='Sample'): {len(control_df):,}")
+    print(f"  Control/LCS rows (ANALYTICAL_TYPE=='Standard' & STD_CODE not excluded): {len(control_df):,}")
 
     if missing_columns:
         print(f"  Missing required columns: {missing_columns}")

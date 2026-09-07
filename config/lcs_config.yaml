@@ -1,25 +1,51 @@
-# LCS (Laboratory Control Sample) Anomaly Detection Configuration
+# LCS (Laboratory Control Sample) Historic Drift Detection Configuration
+#
+# Keys read by src/detectors/control_detector.py (LCSDetector). Matches the
+# approach in notebooks/LCS_drift_detection_historic.ipynb: a persistent,
+# per-(ANALYTE_CODE, STD_CODE, SCHEME_CODE) rolling history, scaled so
+# target -> 0 and the failure limit -> +/-1.
 
-# Known target/reference value for the control
-target_value: 100.0
+# Where the persisted rolling history is stored (CSV, one row per retained
+# historical observation).
+history_path: data/processed/lcs_standard_history.csv
 
-# Acceptable range around target (units depend on your data)
-tolerance_window: 10.0  # ±10% or ±10 units
+# STD_CODE values that are not genuine reference-material identifiers and
+# must be excluded before history is ever built.
+excluded_std_codes: ["", "Sample", "TSV_BLANK"]
 
-# Maximum acceptable variance before flagging
-max_variance: 25.0
+# Maximum retained historical observations per (ANALYTE_CODE, STD_CODE,
+# SCHEME_CODE) group.
+max_history_per_analyte: 30
 
-# Maximum acceptable drift rate per sample
-drift_rate_threshold: 0.5
+# Below this many valid historical observations: point status only,
+# INSUFFICIENT_HISTORY for trend.
+min_history_point: 3
 
-# Sensitivity level: "high", "medium", or "low"
-sensitivity: "medium"
+# Below this many (but >= min_history_point): trend is computed but reported
+# at reduced confidence and never auto-escalates to a *_FAILURE_DRIFT.
+min_history_trend: 6
 
-# Threshold confidence to trigger detection (0-100)
-confidence_threshold: 75
+# Most recent, valid, transformed observations used for the Theil-Sen trend
+# fit (or all available if fewer than this).
+trend_window: 10
 
-# Minimum samples needed for trend detection
-min_samples_for_trend: 15
+# |slope| below this counts as FLAT, not UP/DOWN.
+slope_eps: 1.0e-6
 
-# Enable/disable this detector
+# Minimum directional consistency ("trend strength") required before a
+# trend is allowed to escalate severity or show a boundary projection.
+trend_strength_min_for_escalation: 0.6
+
+# Fraction of the way from target to the warning boundary a consistent
+# trend must have covered before it escalates from *_WARNING_DRIFT to
+# *_FAILURE_DRIFT.
+trend_progress_min_for_failure_drift: 0.75
+
+# An observation whose transformed value ("offset") exceeds +/- this bound
+# is still analysed and flagged normally, but is excluded from the
+# persisted history so a wild/error-like reading can't distort future
+# trend fits.
+offset_exclusion_bound: 2.0
+
+# Enable/disable this detector.
 enabled: true
