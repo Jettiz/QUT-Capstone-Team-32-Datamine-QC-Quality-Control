@@ -1,0 +1,37 @@
+# Configuration for the Matrix Spike anomaly detection pipeline.
+
+matrix_spike:
+  rolling_window: 10
+  rolling_min_periods: 3
+  mad_scale: 0.6745
+  robust_z_threshold: 3.0
+  drift_threshold: 0.5
+  extreme_score_threshold: 10.0
+
+  historical:
+    sheet: "SPK(MS) Assessment"
+    rolling_window: 10
+    min_history: 3
+
+  isolation_forest:
+    min_history: 20
+    contamination: 0.05
+    n_estimators: 200
+    random_state: 42
+
+  drift:
+    min_history: 3
+    rolling_window: 10
+    consecutive_required: 3
+    boundary_level: 1.0
+    trend_window: 10
+
+  time_series:
+    rolling_window: 10
+    min_periods: 5
+    early_drift_fraction: 0.75
+    persistence_windows: 4
+    strong_drift_fraction: 1.00
+    strong_persistence_windows: 3
+
+  output_dir: ms_outputs
