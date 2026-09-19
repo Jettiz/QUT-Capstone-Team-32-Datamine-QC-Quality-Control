@@ -27,6 +27,7 @@ PARENT_NUMERIC_FINAL_VALUE,parent_value,float,false
 UNIT_CODE,unit_code,str,true
 SPECIFICATION_CODE,specification_code,str,false
 INSTRUMENT_ID,instrument_id,str,false
+INSTRUMENT_CODE,instrument_id,str,false
 ABSDIFF,abs_diff,float,false
 AVG,avg_value,float,false
 ABS%DIFF,abs_pct_diff,float,false

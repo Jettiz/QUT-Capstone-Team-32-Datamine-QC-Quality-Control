@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Detector Overview — Proof of Concept</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav class="breadcrumb">
+    <a href="index.html">1. Load sample</a>
+    <span aria-hidden="true">&rsaquo;</span>
+    <span aria-current="page">2. Detector overview</span>
+    <span aria-hidden="true">&rsaquo;</span>
+    <span class="breadcrumb-disabled">3. Detail</span>
+  </nav>
+
+  <header class="page-header">
+    <h1>Detector Overview</h1>
+    <p class="subtitle">
+      Each card below is one QC detector; anomaly counts are dummy data (Phase 1),
+      but usability reflects the real column/row check from the file you loaded.
+    </p>
+  </header>
+
+  <main>
+    <p id="no-report-message" class="error-message" hidden>
+      No sample has been loaded yet. <a href="index.html">Go back and load a sample first &rsaquo;</a>
+    </p>
+
+    <div id="summary-content">
+      <p class="subtitle">Loaded file: <strong id="summary-file-name"></strong></p>
+      <div id="detector-grid" class="detector-grid"></div>
+
+      <section id="row-sample-section" class="row-sample-section">
+        <h2>Sample data rows</h2>
+        <p class="subtitle">
+          Showing up to 15 real rows from the loaded file, worst issue first.
+        </p>
+        <p id="row-sample-note" class="row-sample-note" hidden></p>
+        <div class="row-filters">
+          <label for="row-type-filter">Sample type</label>
+          <select id="row-type-filter"></select>
+          <label for="row-tag-filter">Detected issue</label>
+          <select id="row-tag-filter"></select>
+          <label for="row-analyte-filter">Analyte</label>
+          <select id="row-analyte-filter"></select>
+        </div>
+        <p id="row-count-message" class="row-count-message"></p>
+        <div class="row-table-scroll">
+          <table id="row-sample-table" class="row-sample-table"></table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="page-footer">
+    <p><a href="index.html">&lsaquo; Load a different sample</a></p>
+  </footer>
+
+  <script src="data.js" defer></script>
+  <script src="ranking.js" defer></script>
+  <script src="rows.js" defer></script>
+  <script src="table.js" defer></script>
+  <script src="report-store.js" defer></script>
+  <script src="summary.js" defer></script>
+</body>
+</html>
