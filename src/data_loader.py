@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
@@ -14,7 +15,6 @@ DEFAULT_CONFIG_PATH        = Path("column_config.csv")
 DEFAULT_SUPPLEMENTARY_PATH = Path("QC_Anomaly_Training_Data_v2.xlsx")
 
 MS_SHEET  = "SPK(MS) Assessment"
-MSD_SHEET = "MSD assessment"
 UNNAMED_COLUMN_PATTERNS = {"", ".1", ".2", "UNNAMED"}
 
 SUPPORTED_FORMATS = {
@@ -58,8 +58,7 @@ def load_qc_data(
     supplementary_path:
         Optional path to QC_Anomaly_Training_Data_v2.xlsx.
         When provided, Matrix Spike records are loaded from the
-        'SPK(MS) Assessment' sheet and Matrix Spike Duplicate records
-        from the 'MSD assessment' sheet, then appended to the primary dataset.
+        'SPK(MS) Assessment' sheet, then appended to the primary dataset.
         If the file does not exist, a warning is logged and loading continues
         without the supplementary data.
     """
@@ -103,6 +102,11 @@ def load_qc_data(
     # Apply data types
     df = _apply_dtypes(df, available)
 
+    # Derive rpd/mean_conc (Replicate/Duplicate precision metrics) -- see
+    # _derive_precision_metrics() docstring for why these can't just be a
+    # column_config.csv mapping.
+    df = _derive_precision_metrics(df)
+
     log.info(
         "Final dataset: %d rows, %d columns from '%s'%s.",
         len(df),
@@ -130,7 +134,7 @@ def _append_supplementary(
     supplementary_path: Path,
 ) -> pd.DataFrame:
     """
-    Load Matrix Spike and MSD records from the supplementary Excel file
+    Load Matrix Spike records from the supplementary Excel file
     and append them to the primary DataFrame.
     """
     if not supplementary_path.is_file():
@@ -156,21 +160,6 @@ def _append_supplementary(
         log.error(
             "Could not load Matrix Spike sheet '%s': %s — skipping.",
             MS_SHEET, exc,
-        )
-
-    # Matrix Spike Duplicate
-    try:
-        msd = pd.read_excel(supplementary_path, sheet_name=MSD_SHEET)
-        msd.columns = [str(c).strip().upper() for c in msd.columns]
-        msd = _drop_unnamed_columns(msd)
-        log.info(
-            "Loaded %d MSD rows from sheet '%s'.", len(msd), MSD_SHEET
-        )
-        frames.append(msd)
-    except Exception as exc:
-        log.error(
-            "Could not load MSD sheet '%s': %s — skipping.",
-            MSD_SHEET, exc,
         )
 
     if not frames:
@@ -275,6 +264,41 @@ def _validate_required_columns(raw: pd.DataFrame, config: pd.DataFrame) -> None:
         )
 
     log.info("All required columns present.")
+
+
+def _derive_precision_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive `rpd` (relative percent difference) and `mean_conc` (mean
+    concentration) from `measured_value`/`parent_value`, wherever both are
+    present. Neither column has (or should have) a column_config.csv row --
+    they are not present under any name in either raw source file
+    (ResultSet.csv / QC_Sample_Data.csv); they are always computed.
+
+    Formula ported verbatim from notebooks/REP__distribution_analysis.ipynb
+    and notebooks/DUP__distribution_analysis.ipynb's build_replicate_model()
+    / build_duplicate_model() (identical in both, feeding
+    notebooks/REP__historical_reference_model.ipynb /
+    DUP__historical_reference_model.ipynb downstream):
+        MEAN_CONC = (NUMERIC_FINAL_VALUE + PARENT_NUMERIC_FINAL_VALUE) / 2
+        RPD = |NUMERIC_FINAL_VALUE - PARENT_NUMERIC_FINAL_VALUE| / MEAN_CONC * 100
+    RPD rounded to 2 d.p.; both NaN wherever `mean_conc == 0` (guards the
+    division -- a genuinely zero-sum pair has no meaningful RPD) or either
+    input is missing.
+
+    `parent_value` is only ever populated for Replicate/Duplicate rows, so
+    this is safe to call unconditionally on the full loaded dataset --
+    Blank/Standard/Spike rows simply get NaN for both new columns.
+    """
+    if "measured_value" not in df.columns or "parent_value" not in df.columns:
+        return df
+
+    mean_conc = (df["measured_value"] + df["parent_value"]) / 2
+    abs_diff = (df["measured_value"] - df["parent_value"]).abs()
+
+    df["mean_conc"] = mean_conc
+    df["rpd"] = np.where(mean_conc != 0, (abs_diff / mean_conc * 100).round(2), np.nan)
+
+    return df
 
 
 def _apply_dtypes(df: pd.DataFrame, config: pd.DataFrame) -> pd.DataFrame:

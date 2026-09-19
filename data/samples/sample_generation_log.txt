@@ -1,5 +1,5 @@
 Test sample generation log
-Generated: 2026-09-07 14:02:04
+Generated: 2026-09-19 20:21:26
 By: JurriaanvdS <jjvanderstruijk@hotmail.com>
 
 BLANK_PASS_1.csv: 3 records
@@ -40,6 +40,14 @@ SRMS_FAIL_1.csv: 13 records
 SRMS_FAIL_2.csv: 12 records
 SRMS_FAIL_IGN_1.csv: 25 records
 SRMS_FAIL_IGN_2.csv: 74 records
+MS_PASS_1.csv: 2 records
+MS_PASS_2.csv: 2 records
+MS_WARN_1.csv: 22 records
+MS_WARN_2.csv: 17 records
+MS_FAIL_1.csv: 13 records
+MS_FAIL_2.csv: 26 records
+MS_FAIL_IGN_1.csv: 94 records
+MS_FAIL_IGN_2.csv: 17 records
 
 Skipped (no matching jobs found):
 BLANK_WARN: skipped
