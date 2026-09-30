@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Load Sample — Proof of Concept</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav class="breadcrumb">
+    <span aria-current="page">1. Load sample</span>
+    <span aria-hidden="true">&rsaquo;</span>
+    <span class="breadcrumb-disabled">2. Detector overview</span>
+    <span aria-hidden="true">&rsaquo;</span>
+    <span class="breadcrumb-disabled">3. Detail</span>
+  </nav>
+
+  <header class="page-header">
+    <h1>Load a Sample</h1>
+    <p class="subtitle">
+      Phase 1 proof of concept &mdash; pick a real local CSV (e.g. one of the files
+      under <code>data/samples/</code>) to see which QC detectors have the columns
+      and row types they need to run. This runs entirely in your browser
+      (the File API) &mdash; nothing is uploaded anywhere, and no backend is
+      involved. It mirrors, in simplified form, what
+      <code>src/data_loader.py</code> and <code>src/data_validator.py</code>
+      do on the real pipeline.
+    </p>
+  </header>
+
+  <main class="load-layout">
+    <section class="load-panel">
+      <label class="file-label" for="sample-file">CSV file</label>
+      <div class="file-row">
+        <input type="file" id="sample-file" accept=".csv,text/csv" />
+        <button type="button" id="analyse-button">Analyse sample</button>
+      </div>
+      <p id="load-error" class="error-message" hidden></p>
+    </section>
+
+    <section id="load-summary" class="load-panel" hidden>
+      <h2>Analysis result</h2>
+      <dl class="info-panel">
+        <dt>File</dt>
+        <dd data-field="file-name"></dd>
+        <dt>Data rows</dt>
+        <dd data-field="row-count"></dd>
+        <dt>Columns found</dt>
+        <dd data-field="column-count"></dd>
+      </dl>
+
+      <h3>Which detectors can use this data?</h3>
+      <table class="detector-check-table">
+        <thead>
+          <tr><th>Detector</th><th>Status</th><th>Details</th></tr>
+        </thead>
+        <tbody id="detector-check-body"></tbody>
+      </table>
+
+      <button type="button" id="continue-button" disabled>Continue to overview &rsaquo;</button>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    <p>
+      All checks on this page run locally in your browser. Matrix Spike Duplicate is
+      not listed &mdash; that sample type has been removed from this project.
+    </p>
+  </footer>
+
+  <script src="data.js" defer></script>
+  <script src="rows.js" defer></script>
+  <script src="report-store.js" defer></script>
+  <script src="load.js" defer></script>
+</body>
+</html>

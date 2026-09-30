@@ -20,7 +20,7 @@ class AnomalyResult:
     Standard result object for any anomaly detection.
 
     Attributes:
-        anomaly_type: str - Type of QC sample ("blank", "lcs", "duplicate", "srm", "ms", "msd")
+        anomaly_type: str - Type of QC sample ("blank", "lcs", "duplicate", "srm", "ms")
         detected: bool - Whether anomaly was detected
         confidence: float - Confidence level (0-100%)
         severity: str - "low", "medium", "high", "critical"
@@ -88,11 +88,4 @@ class MatrixSpikeAnomalyResult(AnomalyResult):
     """Result object for matrix spike anomaly detection."""
     def __init__(self, *args, **kwargs):
         kwargs['anomaly_type'] = 'matrix_spike'
-        super().__init__(*args, **kwargs)
-
-
-class MatrixSpikeDuplicateAnomalyResult(AnomalyResult):
-    """Result object for matrix spike duplicate anomaly detection."""
-    def __init__(self, *args, **kwargs):
-        kwargs['anomaly_type'] = 'matrix_spike_duplicate'
         super().__init__(*args, **kwargs)

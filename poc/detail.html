@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Anomaly Viewer — Proof of Concept</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav class="breadcrumb">
+    <a href="index.html">1. Load sample</a>
+    <span aria-hidden="true">&rsaquo;</span>
+    <a href="summary.html">2. Detector overview</a>
+    <span aria-hidden="true">&rsaquo;</span>
+    <span aria-current="page">3. Detail</span>
+  </nav>
+
+  <header class="page-header">
+    <h1 id="detector-title">Anomaly Viewer</h1>
+    <p class="subtitle" id="detector-subtitle">
+      Phase 1 proof of concept &mdash; dummy data and placeholder images only.
+    </p>
+  </header>
+
+  <main class="app-layout">
+    <section class="viz-panel" id="viz-panel" aria-labelledby="viz-heading">
+      <h2 id="viz-heading">Visualisation</h2>
+
+      <div class="image-frame">
+        <img id="main-image" alt="" hidden onerror="LCSPoc.render.handleImageError(event)" />
+        <div id="image-fallback" class="image-fallback" hidden></div>
+        <div id="placeholder-chart" class="placeholder-chart" hidden></div>
+      </div>
+
+      <dl class="info-panel">
+        <dt>Item</dt>
+        <dd><span id="panel-code"></span> &mdash; <span id="panel-label"></span></dd>
+
+        <dt>Severity</dt>
+        <dd><span id="panel-severity" class="severity-badge"></span></dd>
+      </dl>
+      <dl class="info-panel" id="info-metrics"></dl>
+    </section>
+
+    <section class="controls-panel" aria-labelledby="controls-heading">
+      <h2 id="controls-heading">Anomalous items</h2>
+      <div id="item-controls" role="group" aria-label="Select an item to view"></div>
+    </section>
+  </main>
+
+  <section id="row-sample-section" class="row-sample-section">
+    <h2>Sample data rows</h2>
+    <p class="subtitle">
+      Showing up to 15 real rows for this detector, worst issue first.
+    </p>
+    <p id="row-sample-note" class="row-sample-note" hidden></p>
+    <p id="no-row-sample-message" class="error-message" hidden></p>
+    <div id="row-sample-content" hidden>
+      <div class="row-filters">
+        <span class="row-filter-locked-label">Sample type: <strong id="row-type-locked" class="locked-value"></strong></span>
+        <label for="row-tag-filter">Detected issue</label>
+        <select id="row-tag-filter"></select>
+        <label for="row-analyte-filter">Analyte</label>
+        <select id="row-analyte-filter"></select>
+      </div>
+      <p id="row-count-message" class="row-count-message"></p>
+      <div class="row-table-scroll">
+        <table id="row-sample-table" class="row-sample-table"></table>
+      </div>
+    </div>
+  </section>
+
+  <footer class="page-footer">
+    <p>
+      All data and images on this page are dummy placeholders for demonstration purposes only.
+      The sample data rows below are real data from the file you loaded.
+    </p>
+  </footer>
+
+  <!-- Classic scripts, loaded in dependency order. type="module" is
+       deliberately avoided: module imports are blocked under file:// in
+       Chromium-based browsers, and this POC must run by double-clicking
+       this file with no local server. -->
+  <script src="data.js" defer></script>
+  <script src="ranking.js" defer></script>
+  <script src="render.js" defer></script>
+  <script src="app.js" defer></script>
+
+  <!-- Separate, additive controller for the real-data row table below --
+       fully independent of app.js's dummy-item viewer above. -->
+  <script src="rows.js" defer></script>
+  <script src="table.js" defer></script>
+  <script src="report-store.js" defer></script>
+  <script src="detail-rows.js" defer></script>
+</body>
+</html>

@@ -15,10 +15,33 @@ Key Functions:
 - validate_duplicate_data(df) -> dict
 - validate_replicate_data(df) -> dict
 - validate_srm_data(df) -> dict
+- validate_matrix_spike_data(df) -> dict
 - check_missing_values(df) -> dict
 - check_outliers(df) -> dict
 
 Returns validation report with status and any warnings/errors.
+
+Column-naming convention
+-------------------------
+validate_lcs_data() and validate_srm_data() check RAW, uppercase CCLAS
+column names (ANALYTE_CODE, NUMERIC_FINAL_VALUE, ...). This is deliberate:
+they run immediately ahead of LCSDetector/SRMSDetector
+(src/detectors/control_detector.py, srms_detector.py), both of which are
+hard-wired to that same raw uppercase schema -- validating a
+renamed/lowercased frame instead would just trade one mismatch (validator
+vs. loader) for a worse one (validator vs. the real, working detector it
+precedes).
+
+validate_blank_data(), validate_duplicate_data(), validate_replicate_data(),
+and validate_matrix_spike_data() check the LOWERCASE internal column names
+produced by data_loader.load_qc_data() instead (e.g. analyte_code,
+measured_value, rpd, mean_conc -- see that module's column_config.csv-driven
+renaming, plus its _derive_precision_metrics() for rpd/mean_conc
+specifically). None of these four sample types has a real, implemented
+detector expecting raw uppercase columns yet (src/detectors/blank_detector.py
+and matrix_spike_detector.py are empty stubs; there is no replicate
+detector at all), so there is no competing consumer to stay compatible
+with -- these four validate what the loader actually produces.
 """
 
 from pathlib import Path
@@ -47,31 +70,93 @@ _LCS_EXCLUDED_STD_CODES = {"", "Sample", "TSV_BLANK"}
 
 # Columns required to build the replicate/duplicate reference models (see
 # notebooks/REP__historical_reference_model.ipynb and
-# notebooks/DUP__historical_reference_model.ipynb). Both notebooks load an
-# already paired, pre-filtered input (one row per replicate/duplicate pair),
-# so there is no ANALYTICAL_TYPE-style subset filter here.
+# notebooks/DUP__historical_reference_model.ipynb, and
+# notebooks/REP__distribution_analysis.ipynb / DUP__distribution_analysis.ipynb
+# for where rpd/mean_conc actually come from). Lowercase internal names --
+# data_loader.load_qc_data() renames the raw CCLAS columns AND derives
+# rpd/mean_conc (see its _derive_precision_metrics()); this validator checks
+# its output, not the raw file. Both notebooks load an already paired,
+# pre-filtered input (one row per replicate/duplicate pair), so there is no
+# analytical_type-style subset filter here either.
 _REP_REQUIRED_COLUMNS = {
-    "ANALYTE_CODE": "str",
-    "RPD": "float",
-    "MEAN_CONC": "float",
-    "PRECISION_STATUS": "str",
-    "STAT_DL_VALUE": "float",
-    "LIM_REP_VALUE": "float",
+    "analyte_code": "str",
+    "rpd": "float",
+    "mean_conc": "float",
+    "precision_status": "str",
+    "stat_detection_limit": "float",
+    "limiting_repeatability": "float",
 }
 _DUP_REQUIRED_COLUMNS = {
-    "ANALYTE_CODE": "str",
-    "RPD": "float",
-    "MEAN_CONC": "float",
-    "PRECISION_STATUS": "str",
-    "STAT_DL_DUP_VALUE": "float",
-    "LIM_REP_DUP_VALUE": "float",
+    "analyte_code": "str",
+    "rpd": "float",
+    "mean_conc": "float",
+    "precision_status": "str",
+    "stat_detection_limit_dup": "float",
+    "limiting_repeatability_dup": "float",
 }
 
-# STAT_DL_(DUP_)VALUE and LIM_REP_(DUP_)VALUE feed
+# stat_detection_limit(_dup)/limiting_repeatability(_dup) feed
 # ALLOWABLE_RPD = 100 * (STAT_DL / MEAN_CONC) + LIM_REP, so a negative value
 # is an impossible limit, not just a missing one.
-_REP_NONNEGATIVE_COLUMNS = ["STAT_DL_VALUE", "LIM_REP_VALUE"]
-_DUP_NONNEGATIVE_COLUMNS = ["STAT_DL_DUP_VALUE", "LIM_REP_DUP_VALUE"]
+_REP_NONNEGATIVE_COLUMNS = ["stat_detection_limit", "limiting_repeatability"]
+_DUP_NONNEGATIVE_COLUMNS = ["stat_detection_limit_dup", "limiting_repeatability_dup"]
+
+# Columns required for Blank sample validation (see notebooks/BLANK_updated.ipynb
+# plus repo-owner clarification on data/raw/ResultSet.csv's real Blank rows):
+# NUMERIC_FINAL_VALUE is the found value, INTERNAL_MIN_VALUE/INTERNAL_MAX_VALUE
+# are the failure limits, INTERNAL_TARGET_VALUE is the expected value, and the
+# other grouping columns match LCS/Control's. No censored-value/LOD check is
+# included -- there is no real detection-limit column for Blank anywhere in
+# this data (BLANK_updated.ipynb's own "<LOD" check is a text-pattern scan
+# that found zero matches and isn't a real business rule). Warning-limit
+# columns and instrument are deliberately excluded from required_columns:
+# confirmed 0% and ~0% (1/17,997) populated respectively for Blank rows in
+# ResultSet.csv.
+_BLANK_REQUIRED_COLUMNS = {
+    "analytical_type": "str",
+    "std_lot_code": "str",
+    "std_code": "str",
+    "scheme_code": "str",
+    "job_code": "str",
+    "analyte_code": "str",
+    "analysed_date": "datetime",
+    "measured_value": "float",
+    "target_value": "float",
+    "limit_min": "float",
+    "limit_max": "float",
+    "unit_code": "str",
+}
+
+# Columns required for Matrix Spike validation (see notebooks/MS_Detection.ipynb
+# and data/raw/QC_Anomaly_Training_Data_v2.xlsx's "SPK(MS) Assessment" sheet --
+# confirmed to share the identical 27-column ResultSet.csv/SRM schema, plus
+# QC_TYPE). Mirrors _SRM_REQUIRED_COLUMNS closely since the real data is
+# structurally the same. parent_value (PARENT_NUMERIC_FINAL_VALUE) and
+# instrument_id are deliberately excluded: confirmed 0% populated in the real
+# MS export, matching the notebook's own documented finding that recovery %
+# "cannot be computed" from this data -- detection there uses the same
+# target/limit transform as LCS/SRM instead.
+_MS_REQUIRED_COLUMNS = {
+    "analytical_type": "str",
+    "std_lot_code": "str",
+    "std_code": "str",
+    "job_code": "str",
+    "scheme_code": "str",
+    "analyte_code": "str",
+    "analysed_date": "datetime",
+    "measured_value": "float",
+    "target_value": "float",
+    "limit_min": "float",
+    "limit_max": "float",
+    "limit_min_inclusive": "str",
+    "limit_max_inclusive": "str",
+    "limit_max_warning": "float",
+    "limit_min_warning": "float",
+    "limit_min_warning_inclusive": "str",
+    "limit_max_warning_inclusive": "str",
+    "unit_code": "str",
+    "specification_code": "str",
+}
 
 # Columns required by the SRMS candidate pipeline (see
 # src/detectors/srms_detector.py's REQUIRED_COLUMNS / require_columns()).
@@ -182,12 +267,44 @@ def validate_structure(df: pd.DataFrame, config_dir: str = "config/") -> bool:
 
 def validate_blank_data(df: pd.DataFrame) -> dict:
     """
-    Validate blank sample data:
-    - Check for censored values (< LOD)
-    - Verify numeric columns
-    - Detect obvious data entry errors
+    Validate Blank sample data ahead of a future blank-anomaly detector
+    (src/detectors/blank_detector.py, currently an empty stub).
+
+    1. Filters df to the Blank subset: analytical_type == "blank"
+       (case-insensitive, matching notebooks/BLANK_updated.ipynb's own
+       `.str.casefold().eq("blank")` filter).
+    2. For each column required, checks the subset has no missing (null)
+       values and the column's dtype matches what's expected.
+
+    No censored-value/limit-of-detection check is performed -- see
+    _BLANK_REQUIRED_COLUMNS' comment for why.
     """
-    pass
+    print(f"[DataValidator] -- Blank data validation " + "-" * 40)
+
+    if "analytical_type" in df.columns:
+        analytical_type = df["analytical_type"].fillna("").astype(str).str.strip().str.casefold()
+        blank_df = df[analytical_type.eq("blank")]
+    else:
+        blank_df = df.iloc[0:0]
+
+    print(f"  Blank rows (analytical_type=='blank'): {len(blank_df):,}")
+
+    missing_columns, null_counts, dtype_issues = _check_required_columns(blank_df, _BLANK_REQUIRED_COLUMNS)
+
+    status = not missing_columns and not null_counts and not dtype_issues
+
+    if status:
+        print("  Result: OK")
+    else:
+        print(f"  Result: FAILED (missing_columns={missing_columns}, null_counts={null_counts}, dtype_issues={dtype_issues})")
+
+    return {
+        "status": status,
+        "n_rows": len(blank_df),
+        "missing_columns": missing_columns,
+        "null_counts": null_counts,
+        "dtype_issues": dtype_issues,
+    }
 
 
 def validate_lcs_data(df: pd.DataFrame) -> dict:
@@ -308,25 +425,30 @@ def _validate_duplicate_like(
 
 def validate_duplicate_data(df: pd.DataFrame) -> dict:
     """
-    Validate duplicate-pair data ahead of the duplicate reference-model
-    analysis (notebooks/DUP__historical_reference_model.ipynb).
+    Validate duplicate-pair data (data_loader.load_qc_data()'s internal
+    schema) ahead of the duplicate reference-model analysis
+    (notebooks/DUP__distribution_analysis.ipynb ->
+    notebooks/DUP__historical_reference_model.ipynb).
 
-    Checks ANALYTE_CODE, RPD, MEAN_CONC, and PRECISION_STATUS (used to
+    Checks analyte_code, rpd, mean_conc, and precision_status (used to
     filter/group the reference population) plus the duplicate-specific
-    limit columns STAT_DL_DUP_VALUE/LIM_REP_DUP_VALUE (used to compute the
-    allowable-RPD curve), for missing columns, nulls, dtype mismatches, and
-    negative limit values.
+    limit columns stat_detection_limit_dup/limiting_repeatability_dup (used
+    to compute the allowable-RPD curve), for missing columns, nulls, dtype
+    mismatches, and negative limit values. rpd/mean_conc are derived by
+    data_loader._derive_precision_metrics(), not sourced from any raw column.
     """
     return _validate_duplicate_like(df, _DUP_REQUIRED_COLUMNS, _DUP_NONNEGATIVE_COLUMNS, "Duplicate")
 
 
 def validate_replicate_data(df: pd.DataFrame) -> dict:
     """
-    Validate replicate-pair data ahead of the replicate reference-model
-    analysis (notebooks/REP__historical_reference_model.ipynb).
+    Validate replicate-pair data (data_loader.load_qc_data()'s internal
+    schema) ahead of the replicate reference-model analysis
+    (notebooks/REP__distribution_analysis.ipynb ->
+    notebooks/REP__historical_reference_model.ipynb).
 
-    Same checks as validate_duplicate_data, against the replicate-specific
-    limit columns STAT_DL_VALUE/LIM_REP_VALUE.
+    Same checks as validate_duplicate_data, against the non-suffixed limit
+    columns stat_detection_limit/limiting_repeatability.
     """
     return _validate_duplicate_like(df, _REP_REQUIRED_COLUMNS, _REP_NONNEGATIVE_COLUMNS, "Replicate")
 
@@ -391,17 +513,62 @@ def validate_srm_data(df: pd.DataFrame) -> dict:
         "invalid_limits": invalid_limits,
     }
 
-def validate_matrix_spike_dupl_data(df: pd.DataFrame) -> dict:
-    """
-    Validate matrix spike duplicate data:
-    - Check for duplicate spike entries
-    """
-    pass
-
 def validate_matrix_spike_data(df: pd.DataFrame) -> dict:
     """
-    Validate matrix spike data:
-    - Check spike concentrations are defined
+    Validate Matrix Spike data ahead of a future matrix-spike detector
+    (src/detectors/matrix_spike_detector.py, currently an empty stub).
+
+    1. Filters df to the Matrix Spike subset: analytical_type == "Spike"
+       (confirmed via the real data/raw/QC_Anomaly_Training_Data_v2.xlsx
+       "SPK(MS) Assessment" sheet -- every row there is already "Spike"/
+       QC_TYPE "MS", so this filter is a safe no-op there, but keeps this
+       validator correct if ever run against a mixed dataset, matching
+       validate_lcs_data's/validate_srm_data's own defensive filtering).
+    2. For each column required, checks the subset has no missing values
+       and the column's dtype matches what's expected.
+    3. Flags an impossible acceptance-limit span (limit_min >= limit_max),
+       mirroring validate_srm_data -- the real MS data shares SRM's schema.
+
+    parent_value/recovery is deliberately not required -- see
+    _MS_REQUIRED_COLUMNS' comment for why.
     """
-    pass
+    print(f"[DataValidator] -- Matrix Spike data validation " + "-" * 40)
+
+    if "analytical_type" in df.columns:
+        ms_df = df[df["analytical_type"] == "Spike"]
+    else:
+        ms_df = df.iloc[0:0]
+
+    print(f"  Matrix Spike rows (analytical_type=='Spike'): {len(ms_df):,}")
+
+    missing_columns, null_counts, dtype_issues = _check_required_columns(ms_df, _MS_REQUIRED_COLUMNS)
+
+    invalid_limits = {}
+    if "limit_min" in ms_df.columns and "limit_max" in ms_df.columns:
+        lower = pd.to_numeric(ms_df["limit_min"], errors="coerce")
+        upper = pd.to_numeric(ms_df["limit_max"], errors="coerce")
+        n_bad_span = int((upper <= lower).sum())
+        if n_bad_span:
+            invalid_limits["limit_min/limit_max"] = n_bad_span
+    if invalid_limits:
+        print(f"  Invalid limit values (lower >= upper): {invalid_limits}")
+
+    status = not missing_columns and not null_counts and not dtype_issues and not invalid_limits
+
+    if status:
+        print("  Result: OK")
+    else:
+        print(
+            f"  Result: FAILED (missing_columns={missing_columns}, null_counts={null_counts}, "
+            f"dtype_issues={dtype_issues}, invalid_limits={invalid_limits})"
+        )
+
+    return {
+        "status": status,
+        "n_rows": len(ms_df),
+        "missing_columns": missing_columns,
+        "null_counts": null_counts,
+        "dtype_issues": dtype_issues,
+        "invalid_limits": invalid_limits,
+    }
 

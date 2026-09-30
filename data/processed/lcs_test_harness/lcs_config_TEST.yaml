@@ -1,0 +1,14 @@
+enabled: true
+excluded_std_codes:
+- ''
+- Sample
+- TSV_BLANK
+history_path: ..\data\processed\lcs_test_harness\lcs_standard_history_TEST.csv
+max_history_per_analyte: 30
+min_history_point: 3
+min_history_trend: 6
+offset_exclusion_bound: 2.0
+slope_eps: 1.0e-06
+trend_progress_min_for_failure_drift: 0.75
+trend_strength_min_for_escalation: 0.6
+trend_window: 10
