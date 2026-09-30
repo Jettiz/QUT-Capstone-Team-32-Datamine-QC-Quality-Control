@@ -678,6 +678,10 @@ def _assign_final_risk(rule_flag: str, if_anomaly: bool, drift_flag: str, is_ign
         return "High"
     if rule_flag == "Warning":
         return "Medium"
+    if rule_flag == "Pass" and drift_flag == "Failure":
+        return "High"
+    if rule_flag == "Pass" and drift_flag == "Warning":
+        return "Medium"
     if rule_flag == "Pass" and if_anomaly:
         return "Medium"
     return "Low"
