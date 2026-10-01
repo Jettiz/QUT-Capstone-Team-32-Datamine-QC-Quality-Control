@@ -214,7 +214,13 @@ def load_ms_config(path_str=None) -> MSConfig:
         iforest_n_estimators=int(_get("isolation_forest", "n_estimators", MSConfig.iforest_n_estimators)),
         iforest_contamination=float(_get("isolation_forest", "contamination", MSConfig.iforest_contamination)),
         iforest_random_state=int(_get("isolation_forest", "random_state", MSConfig.iforest_random_state)),
-        iforest_min_train=int(_get("isolation_forest", "min_train", MSConfig.iforest_min_train)),
+        iforest_min_train=int(
+            _get(
+                "isolation_forest",
+                "min_history",
+                _get("isolation_forest", "min_train", MSConfig.iforest_min_train),
+            )
+        ),
         output_dir=str(ms.get("output_dir", MSConfig.output_dir)),
     )
 
@@ -241,16 +247,27 @@ def load_ms_data(path_str: str, sheet_name: str = "SPK(MS) Assessment") -> pd.Da
 
 
 def filter_ms_records(raw: pd.DataFrame) -> pd.DataFrame:
-    """Filter to Spike/MS records; exclude ANALYTE_CODE='NA' (non-analyte artefact)."""
-    for col in ["ANALYTICAL_TYPE", "QC_TYPE", "ANALYTE_CODE"]:
-        if col in raw.columns:
-            raw[col] = raw[col].astype(str).str.strip()
+    """Filter to valid Matrix Spike records while preserving literal ``NA`` analytes.
+
+    Blank/missing analyte codes are excluded, but the literal string ``NA`` is
+    retained because it is a valid value in the source data/test contract.
+    """
+    required = ["ANALYTICAL_TYPE", "QC_TYPE", "ANALYTE_CODE"]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        raise ValueError(f"MS detector: missing filter columns: {missing}")
+
+    cleaned = raw.copy()
+    for col in required:
+        cleaned[col] = cleaned[col].astype("string").str.strip()
+
     mask = (
-        raw["ANALYTICAL_TYPE"].str.casefold().eq("spike")
-        & raw["QC_TYPE"].str.casefold().eq("ms")
-        & raw["ANALYTE_CODE"].ne("NA")
+        cleaned["ANALYTICAL_TYPE"].str.casefold().eq("spike")
+        & cleaned["QC_TYPE"].str.casefold().eq("ms")
+        & cleaned["ANALYTE_CODE"].notna()
+        & cleaned["ANALYTE_CODE"].ne("")
     )
-    return raw.loc[mask].copy()
+    return cleaned.loc[mask].copy()
 
 
 def validate_ms_frame(df: pd.DataFrame) -> None:
@@ -449,14 +466,19 @@ def _directional_normalise(deviation, target, lower_col, upper_col):
 
 
 def compute_rolling_warning_position(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
-    """Rolling mean of warning-scale position within each Scheme-Analyte-Unit group."""
+    """Rolling mean of warning-scale position in chronological drift-group order."""
     dg = list(cfg.drift_group_cols)
+
+    # Rolling calculations are temporal, so order by the drift grouping keys and
+    # ANALYSED_DATE rather than relying on the incoming row/lot order.
+    df = df.sort_values(dg + ["ANALYSED_DATE"], kind="stable").reset_index(drop=True)
+
     df["DEVIATION"] = df["NUMERIC_FINAL_VALUE"] - df["INTERNAL_TARGET_VALUE"]
     df["WARNING_SCALE_POSITION"] = _directional_normalise(
         df["DEVIATION"], df["INTERNAL_TARGET_VALUE"],
         df["INTERNAL_MIN_WARNING_VALUE"], df["INTERNAL_MAX_WARNING_VALUE"],
     )
-    df["ROLLING_WARNING_POSITION"] = df.groupby(dg)["WARNING_SCALE_POSITION"].transform(
+    df["ROLLING_WARNING_POSITION"] = df.groupby(dg, sort=False)["WARNING_SCALE_POSITION"].transform(
         lambda x: x.rolling(cfg.ts_rolling_window, cfg.ts_min_periods).mean()
     )
     return df
@@ -588,51 +610,62 @@ def run_drift_detection(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
 
 
 def _merge_drift_flags(df: pd.DataFrame, drift_summary: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
+    """Map series-level drift to only the rows that establish the first drift event.
+
+    The notebook's drift result is a historical Scheme-Analyte-Unit series-level
+    review signal.  It must not be propagated to every later row in that series.
+    Row-level DRIFT_FLAG therefore marks only the consecutive observations that
+    establish the first warning/failure drift event; the complete series result
+    remains in ``drift_summary``.
+    """
     dg = list(cfg.drift_group_cols)
 
-    # Initialise all rows with no drift
-    df["DRIFT_FLAG"]      = "None"
+    df["DRIFT_FLAG"] = "None"
     df["DRIFT_DIRECTION"] = ""
-    df["DRIFT_ONSET"]     = pd.NaT
+    df["DRIFT_ONSET"] = pd.NaT
 
     if drift_summary.empty:
         return df
 
+    def _mark_confirmation_run(group_mask, onset, level, direction):
+        if pd.isna(onset):
+            return
+
+        ordered = df.loc[
+            group_mask & df["ANALYSED_DATE"].notna()
+        ].sort_values("ANALYSED_DATE")
+
+        candidates = ordered.loc[ordered["ANALYSED_DATE"] >= onset]
+        if candidates.empty:
+            return
+
+        # The drift algorithm confirms a drift after this many consecutive
+        # directional rolling breaches.  Mark that confirming run only.
+        idx = candidates.index[: cfg.drift_consecutive_required]
+        df.loc[idx, "DRIFT_FLAG"] = level
+        df.loc[idx, "DRIFT_DIRECTION"] = direction or ""
+        df.loc[idx, "DRIFT_ONSET"] = onset
+
     for _, drift_row in drift_summary.iterrows():
-        # Build mask for this Scheme-Analyte-Unit group
         group_mask = pd.Series(True, index=df.index)
         for col in dg:
-            group_mask = group_mask & (df[col] == drift_row[col])
+            group_mask &= df[col] == drift_row[col]
 
-        drift_level = drift_row.get("drift_level", "None")
-        if drift_level == "None":
-            continue
+        if bool(drift_row.get("warning_drift_detected", False)):
+            _mark_confirmation_run(
+                group_mask,
+                drift_row.get("warning_drift_start", pd.NaT),
+                "Warning",
+                drift_row.get("warning_direction", ""),
+            )
 
-        # Use the correct onset date per severity level
-        # Failure uses failure_drift_start if available, otherwise falls back to warning_drift_start
-        # Warning uses warning_drift_start
-        if drift_level == "Failure":
-            onset = drift_row.get("failure_drift_start")
-            if pd.isna(onset):
-                onset = drift_row.get("warning_drift_start")
-        else:
-            onset = drift_row.get("warning_drift_start")
-
-        if pd.isna(onset):
-            continue
-
-        # Only apply drift flag to rows on or after the onset date
-        date_mask = df["ANALYSED_DATE"] >= onset
-        active_mask = group_mask & date_mask
-
-        df.loc[active_mask, "DRIFT_FLAG"]      = drift_level
-        direction_col = (
-            "failure_direction"
-            if drift_level == "Failure"
-            else "warning_direction"
-        )
-        df.loc[active_mask, "DRIFT_DIRECTION"] = drift_row.get(direction_col, "")
-        df.loc[active_mask, "DRIFT_ONSET"]     = onset
+        if bool(drift_row.get("failure_drift_detected", False)):
+            _mark_confirmation_run(
+                group_mask,
+                drift_row.get("failure_drift_start", pd.NaT),
+                "Failure",
+                drift_row.get("failure_direction", ""),
+            )
 
     return df
 
@@ -798,22 +831,52 @@ def _build_reason(
     return " | ".join(parts)
 
 
+def _assign_detection_method(
+    rule_flag: str,
+    if_anomaly: bool,
+    drift_flag: str,
+    is_ignored: bool,
+) -> str:
+    """Return the analytical mechanism(s) responsible for the row's flag.
+
+    The method name is intentionally deterministic and matches the public test
+    contract: rule-based, drift, and Isolation Forest can appear alone or in
+    combinations. Ignored rows always take precedence.
+    """
+    if is_ignored:
+        return "Ignored"
+
+    methods = []
+
+    if rule_flag in {"Warning", "Failure"}:
+        methods.append("Rule-based")
+
+    if drift_flag in {"Warning", "Failure"}:
+        methods.append("Drift")
+
+    if bool(if_anomaly):
+        methods.append("IsolationForest")
+
+    if not methods:
+        return "None"
+
+    return " + ".join(methods)
+
+
 def apply_risk_scoring(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
     df["FINAL_RISK"] = [
         _assign_final_risk(row["RULE_FLAG"], row["IF_ANOMALY"], row.get("DRIFT_FLAG", "None"), row["IS_IGNORED"])
         for _, row in df.iterrows()
     ]
-    df["DETECTION_METHOD"] = np.select(
-        [
-            df["IS_IGNORED"],
-            df["RULE_FLAG"] == "Failure",
-            (df["RULE_FLAG"] == "Warning") & df["IF_ANOMALY"],
-            df["RULE_FLAG"] == "Warning",
-            (df["RULE_FLAG"] == "Pass") & df["IF_ANOMALY"],
-        ],
-        ["Ignored", "Rule-based", "Rule-based + IsolationForest", "Rule-based", "IsolationForest"],
-        default="None",
-    )
+    df["DETECTION_METHOD"] = [
+        _assign_detection_method(
+            row["RULE_FLAG"],
+            row["IF_ANOMALY"],
+            row.get("DRIFT_FLAG", "None"),
+            row["IS_IGNORED"],
+        )
+        for _, row in df.iterrows()
+    ]
     df["REASON"] = [
         _build_reason(
             row["RULE_FLAG_REASON"], row["RULE_FLAG"], row["IF_ANOMALY"],
@@ -831,18 +894,27 @@ def apply_risk_scoring(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def validate_against_cclas(df: pd.DataFrame) -> pd.DataFrame:
-    df["CCLAS_STATUS_NORMALISED"] = np.select(
-        [
-            df["STANDARD_STATUS"].isin(["UpperFailure", "LowerFailure"]),
-            df["STANDARD_STATUS"].isin(["UpperWarning", "LowerWarning"]),
-            df["STANDARD_STATUS"].isin(["IgnoredUpperFailure", "IgnoredLowerFailure"]),
-        ],
-        ["FAIL", "WARNING", "IGNORED"],
-        default="PASS",
-    )
+    """Compare rule output only where CCLAS has a recognised QC status."""
+    status_map = {
+        "UpperFailure": "FAIL",
+        "LowerFailure": "FAIL",
+        "UpperWarning": "WARNING",
+        "LowerWarning": "WARNING",
+        "IgnoredUpperFailure": "IGNORED",
+        "IgnoredLowerFailure": "IGNORED",
+        "Pass": "PASS",
+    }
+
+    # Unknown source statuses must remain unknown. Treating them as PASS creates
+    # false mismatches against the POC rule result.
+    df["CCLAS_STATUS_NORMALISED"] = df["STANDARD_STATUS"].map(status_map).fillna("UNKNOWN")
     df["RULE_FLAG_NORMALISED"] = df["RULE_FLAG"].str.upper().replace({"FAILURE": "FAIL"})
+
+    known_status = df["CCLAS_STATUS_NORMALISED"].ne("UNKNOWN")
     df["CCLAS_MISMATCH"] = (
-        ~df["IS_IGNORED"] & (df["RULE_FLAG_NORMALISED"] != df["CCLAS_STATUS_NORMALISED"])
+        known_status
+        & ~df["IS_IGNORED"]
+        & (df["RULE_FLAG_NORMALISED"] != df["CCLAS_STATUS_NORMALISED"])
     )
     return df
 
