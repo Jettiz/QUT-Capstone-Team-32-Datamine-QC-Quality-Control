@@ -1070,6 +1070,55 @@ def main():
     print("\nOutputs written:")
     for name, path in paths.items():
         print(f"  {name:<15} {path}")
+      
+def main():
+    # ---------------------------------------------------------
+    # Default paths for running directly from VS Code / PyCharm
+    # ---------------------------------------------------------
+    input_path = "data/raw/QC_Anomaly_Training_Data_v2.xlsx"
+    output_dir = "ms_outputs"
+    config_path = "config/matrix_spike_config.yaml"
+    sheet_name = "SPK(MS) Assessment"
+
+    print(f"Loading MS data from: {input_path}")
+
+    # Load data
+    raw = load_ms_data(
+        input_path,
+        sheet_name=sheet_name,
+    )
+
+    # Filter Matrix Spike records
+    ms = filter_ms_records(raw)
+
+    print(f"MS records after filter: {len(ms):,}")
+    print(f"Unique analytes: {ms['ANALYTE_CODE'].nunique():,}")
+
+    # Load configuration
+    cfg = load_ms_config(config_path)
+
+    # Override output directory
+    cfg = dataclasses.replace(
+        cfg,
+        output_dir=output_dir,
+    )
+
+    # Run detector
+    results, drift_summary = run_ms_detection(ms, cfg)
+
+    # Export results
+    paths = export_results(
+        results,
+        drift_summary,
+        output_dir,
+    )
+
+    # Print summary
+    print_summary(results, drift_summary)
+
+    print("\nOutputs written:")
+    for name, path in paths.items():
+        print(f"  {name:<15} {path}")
 
 
 if __name__ == "__main__":
