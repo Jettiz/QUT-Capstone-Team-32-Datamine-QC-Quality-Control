@@ -589,19 +589,46 @@ def run_drift_detection(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
 
 def _merge_drift_flags(df: pd.DataFrame, drift_summary: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
     dg = list(cfg.drift_group_cols)
+
+    # Initialise all rows with no drift
+    df["DRIFT_FLAG"]      = "None"
+    df["DRIFT_DIRECTION"] = ""
+    df["DRIFT_ONSET"]     = pd.NaT
+
     if drift_summary.empty:
-        df["DRIFT_FLAG"]      = "None"
-        df["DRIFT_DIRECTION"] = ""
-        df["DRIFT_ONSET"]     = pd.NaT
         return df
-    slim = drift_summary[dg + ["drift_level", "warning_direction", "warning_drift_start"]].rename(columns={
-        "drift_level":         "DRIFT_FLAG",
-        "warning_direction":   "DRIFT_DIRECTION",
-        "warning_drift_start": "DRIFT_ONSET",
-    })
-    df = df.merge(slim, on=dg, how="left")
-    df["DRIFT_FLAG"]      = df["DRIFT_FLAG"].fillna("None")
-    df["DRIFT_DIRECTION"] = df["DRIFT_DIRECTION"].fillna("")
+
+    for _, drift_row in drift_summary.iterrows():
+        # Build mask for this Scheme-Analyte-Unit group
+        group_mask = pd.Series(True, index=df.index)
+        for col in dg:
+            group_mask = group_mask & (df[col] == drift_row[col])
+
+        drift_level = drift_row.get("drift_level", "None")
+        if drift_level == "None":
+            continue
+
+        # Use the correct onset date per severity level
+        # Failure uses failure_drift_start if available, otherwise falls back to warning_drift_start
+        # Warning uses warning_drift_start
+        if drift_level == "Failure":
+            onset = drift_row.get("failure_drift_start")
+            if pd.isna(onset):
+                onset = drift_row.get("warning_drift_start")
+        else:
+            onset = drift_row.get("warning_drift_start")
+
+        if pd.isna(onset):
+            continue
+
+        # Only apply drift flag to rows on or after the onset date
+        date_mask = df["ANALYSED_DATE"] >= onset
+        active_mask = group_mask & date_mask
+
+        df.loc[active_mask, "DRIFT_FLAG"]      = drift_level
+        df.loc[active_mask, "DRIFT_DIRECTION"] = drift_row.get("warning_direction", "")
+        df.loc[active_mask, "DRIFT_ONSET"]     = onset
+
     return df
 
 
