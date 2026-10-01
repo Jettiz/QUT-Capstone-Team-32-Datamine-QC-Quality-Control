@@ -1,6 +1,6 @@
 """
-matrix_spike_detector.py
-========================
+ms_detector.py
+==============
 Production anomaly detection module for Matrix Spike (MS) QC samples.
 
 Combines three analytical workstreams:
@@ -16,8 +16,8 @@ CLI usage
 
 Callable from pipeline
 ----------------------
-    from matrix_spike_detector import run_ms_detection, load_ms_config, MSConfig
-    cfg = load_ms_config("config/matrix_spike_detector.yaml")
+    from ms_detector import run_ms_detection, load_ms_config, MSConfig
+    cfg = load_ms_config("config/matrix_spike_config.yaml")
     results, drift_summary = run_ms_detection(df, cfg)
 """
 
@@ -88,7 +88,7 @@ OUTPUT_COLUMNS = [
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT        = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "matrix_spike_detector.yaml"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "matrix_spike_config.yaml"
 DEFAULT_OUTPUT_DIR  = PROJECT_ROOT / "ms_outputs"
 
 
@@ -626,7 +626,12 @@ def _merge_drift_flags(df: pd.DataFrame, drift_summary: pd.DataFrame, cfg: MSCon
         active_mask = group_mask & date_mask
 
         df.loc[active_mask, "DRIFT_FLAG"]      = drift_level
-        df.loc[active_mask, "DRIFT_DIRECTION"] = drift_row.get("warning_direction", "")
+        direction_col = (
+            "failure_direction"
+            if drift_level == "Failure"
+            else "warning_direction"
+        )
+        df.loc[active_mask, "DRIFT_DIRECTION"] = drift_row.get(direction_col, "")
         df.loc[active_mask, "DRIFT_ONSET"]     = onset
 
     return df
@@ -645,12 +650,51 @@ IF_FEATURES = [
 
 
 def run_isolation_forest(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
-    """Per-analyte Isolation Forest with global fallback."""
+    """Run Isolation Forest with robust edge-case handling and per-group fallback."""
+    if df.empty:
+        df["IF_SCORE"] = pd.Series(dtype=float, index=df.index)
+        df["IF_ANOMALY"] = pd.Series(dtype=bool, index=df.index)
+        df["IF_STATUS"] = pd.Series(dtype=str, index=df.index)
+        df["IF_MODEL"] = pd.Series(dtype=str, index=df.index)
+        return df
+
     train_mask = ~df["IS_IGNORED"]
-    X_all      = df[IF_FEATURES].copy()
-    imputer    = SimpleImputer(strategy="median")
-    imputer.fit(X_all[train_mask])
-    X_imp      = pd.DataFrame(imputer.transform(X_all), columns=IF_FEATURES, index=df.index)
+    eligible_count = int(train_mask.sum())
+
+    if eligible_count < cfg.iforest_min_train:
+        df["IF_SCORE"] = np.nan
+        df["IF_ANOMALY"] = False
+        df["IF_STATUS"] = "SKIPPED"
+        df["IF_MODEL"] = (
+            f"skipped (eligible={eligible_count}<{cfg.iforest_min_train})"
+        )
+        return df
+
+    X_all = (
+        df[IF_FEATURES]
+        .replace([np.inf, -np.inf], np.nan)
+        .copy()
+    )
+
+    usable_features = [
+        col for col in IF_FEATURES
+        if X_all.loc[train_mask, col].notna().any()
+    ]
+
+    if not usable_features:
+        df["IF_SCORE"] = np.nan
+        df["IF_ANOMALY"] = False
+        df["IF_STATUS"] = "SKIPPED"
+        df["IF_MODEL"] = "skipped (no usable features)"
+        return df
+
+    imputer = SimpleImputer(strategy="median")
+    imputer.fit(X_all.loc[train_mask, usable_features])
+    X_imp = pd.DataFrame(
+        imputer.transform(X_all[usable_features]),
+        columns=usable_features,
+        index=df.index,
+    )
 
     global_if = IsolationForest(
         n_estimators=cfg.iforest_n_estimators,
@@ -658,37 +702,45 @@ def run_isolation_forest(df: pd.DataFrame, cfg: MSConfig) -> pd.DataFrame:
         random_state=cfg.iforest_random_state,
         n_jobs=-1,
     )
-    global_if.fit(X_imp[train_mask])
+    global_if.fit(X_imp.loc[train_mask])
 
-    if_scores  = pd.Series(np.nan,   index=df.index)
-    if_anomaly = pd.Series(False,    index=df.index)
-    if_model   = pd.Series("global", index=df.index)
+    if_scores = pd.Series(np.nan, index=df.index, dtype=float)
+    if_anomaly = pd.Series(False, index=df.index, dtype=bool)
+    if_model = pd.Series("global", index=df.index, dtype=object)
 
-    for (analyte, scheme), group_idx in df.groupby(["ANALYTE_CODE", "SCHEME_CODE"]).groups.items():
-        train_idx = group_idx[train_mask[group_idx]]
-        n_train   = len(train_idx)
-        X_group   = X_imp.loc[group_idx]
+    for _, group_idx in df.groupby(
+        ["ANALYTE_CODE", "SCHEME_CODE"], sort=False
+    ).groups.items():
+        group_idx = pd.Index(group_idx)
+        train_idx = group_idx[train_mask.loc[group_idx].to_numpy()]
+        n_train = len(train_idx)
+        X_group = X_imp.loc[group_idx]
 
         if n_train >= cfg.iforest_min_train:
-            g_if = IsolationForest(
+            group_if = IsolationForest(
                 n_estimators=cfg.iforest_n_estimators,
                 contamination=cfg.iforest_contamination,
                 random_state=cfg.iforest_random_state,
                 n_jobs=-1,
             )
-            g_if.fit(X_imp.loc[train_idx])
-            if_scores[group_idx]  = -g_if.score_samples(X_group)
-            if_anomaly[group_idx] = g_if.predict(X_group) == -1
-            if_model[group_idx]   = "per-analyte"
+            group_if.fit(X_imp.loc[train_idx])
+            if_scores.loc[group_idx] = -group_if.score_samples(X_group)
+            if_anomaly.loc[group_idx] = group_if.predict(X_group) == -1
+            if_model.loc[group_idx] = "per-analyte"
         else:
-            if_scores[group_idx]  = -global_if.score_samples(X_group)
-            if_anomaly[group_idx] = global_if.predict(X_group) == -1
-            if_model[group_idx]   = f"global (n={n_train}<{cfg.iforest_min_train})"
+            if_scores.loc[group_idx] = -global_if.score_samples(X_group)
+            if_anomaly.loc[group_idx] = global_if.predict(X_group) == -1
+            if_model.loc[group_idx] = (
+                f"global (n={n_train}<{cfg.iforest_min_train})"
+            )
 
-    df["IF_SCORE"]   = if_scores
+    # Ignored CCLAS records should never become ML anomalies.
+    if_anomaly.loc[df["IS_IGNORED"]] = False
+
+    df["IF_SCORE"] = if_scores
     df["IF_ANOMALY"] = if_anomaly
-    df["IF_STATUS"]  = np.where(df["IF_ANOMALY"], "WARNING", "PASS")
-    df["IF_MODEL"]   = if_model
+    df["IF_STATUS"] = np.where(df["IF_ANOMALY"], "WARNING", "PASS")
+    df["IF_MODEL"] = if_model
     return df
 
 
@@ -701,6 +753,8 @@ def _assign_final_risk(rule_flag: str, if_anomaly: bool, drift_flag: str, is_ign
         return "Ignored"
     if rule_flag == "Failure":
         return "Critical"
+    if rule_flag == "Warning" and drift_flag == "Failure":
+        return "High"
     if rule_flag == "Warning" and if_anomaly:
         return "High"
     if rule_flag == "Warning":
@@ -851,12 +905,25 @@ def export_results(
     paths = {}
 
     full_path = output_dir / "ms_detection_results.csv"
-    results.sort_values("IF_SCORE", ascending=False).to_csv(full_path, index=False)
+    risk_order = pd.CategoricalDtype(
+        categories=["Critical", "High", "Medium", "Low", "Ignored"],
+        ordered=True,
+    )
+    full_export = results.copy()
+    full_export["_RISK_ORDER"] = full_export["FINAL_RISK"].astype(risk_order)
+    full_export = full_export.sort_values(
+        ["_RISK_ORDER", "IF_SCORE"], ascending=[True, False], na_position="last"
+    ).drop(columns="_RISK_ORDER")
+    full_export.to_csv(full_path, index=False)
     paths["full"] = full_path
 
     flagged = results[results["FINAL_RISK"].isin(["Critical", "High", "Medium"])].copy()
     flagged_path = output_dir / "ms_detection_flagged.csv"
-    flagged.sort_values("IF_SCORE", ascending=False).to_csv(flagged_path, index=False)
+    flagged["_RISK_ORDER"] = flagged["FINAL_RISK"].astype(risk_order)
+    flagged = flagged.sort_values(
+        ["_RISK_ORDER", "IF_SCORE"], ascending=[True, False], na_position="last"
+    ).drop(columns="_RISK_ORDER")
+    flagged.to_csv(flagged_path, index=False)
     paths["flagged"] = flagged_path
 
     if not drift_summary.empty:
@@ -922,7 +989,7 @@ def main():
     raw = load_ms_data(args.input, sheet_name=args.sheet)
     ms  = filter_ms_records(raw)
     print(f"MS records after filter: {len(ms):,}")
-    print(f"Unique analytes (NA excluded): {ms['ANALYTE_CODE'].nunique():,}")
+    print(f"Unique analytes: {ms['ANALYTE_CODE'].nunique():,}")
 
     results, drift_summary = run_ms_detection(ms, cfg)
     print_summary(results, drift_summary)
