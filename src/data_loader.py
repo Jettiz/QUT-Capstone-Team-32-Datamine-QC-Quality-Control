@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -71,36 +72,43 @@ def load_qc_data(
     # Load raw data file
     raw = _load_file(data_path)
 
-    # Normalise column names
-    raw.columns = raw.columns.str.strip().str.upper()
-    config["source_column"] = config["source_column"].str.strip().str.upper()
+    # Normalise source/config names. CSV and TSV exports can use different
+    # spelling/separators for the same logical field, so downstream code must
+    # see one stable set of internal names.
+    raw.columns = [str(c).strip().upper() for c in raw.columns]
+    config["source_column"] = config["source_column"].astype(str).str.strip().str.upper()
+    config["internal_column"] = config["internal_column"].astype(str).str.strip()
 
-    # Validate required columns
-    _validate_required_columns(raw, config)
-
-    # Append MS and MSD from supplementary file if provided
+    # Append supplementary Matrix Spike data before resolving mappings so the
+    # same mapping rules are applied to both primary and supplementary records.
     if supplementary_path is not None:
         raw = _append_supplementary(raw, Path(supplementary_path))
 
-    # Select and rename to internal column names
-    available = config[config["source_column"].isin(raw.columns)].copy()
+    # Resolve CSV/TSV source names to one internal schema.  Multiple config rows
+    # may point to the same internal_column (aliases); the first matching alias
+    # is used.  Separator/case-only differences are also matched automatically.
+    resolved = _resolve_column_mappings(raw, config)
+    _validate_required_columns(config, resolved)
 
-    missing_optional = config[
-        (~config["source_column"].isin(raw.columns)) &
-        (config["required"].astype(str).str.lower().isin(["false", "0", "no"]))
-    ]
-    if not missing_optional.empty:
-        log.warning(
-            "Optional columns not found, will be absent from output: %s",
-            missing_optional["source_column"].tolist(),
+    if not resolved:
+        raise ValueError(
+            "No configured source columns could be mapped from the input file. "
+            "Check column_config.csv against the CSV/TSV export."
         )
 
-    df = raw[available["source_column"]].copy()
-    rename_map = dict(zip(available["source_column"], available["internal_column"]))
-    df = df.rename(columns=rename_map)
+    selected_source_columns = list(resolved.values())
+    df = raw[selected_source_columns].copy()
+    df.columns = list(resolved.keys())
 
-    # Apply data types
-    df = _apply_dtypes(df, available)
+    missing_optional = _missing_optional_internal_columns(config, resolved)
+    if missing_optional:
+        log.warning(
+            "Optional internal columns not found in this export: %s",
+            missing_optional,
+        )
+
+    # Apply data types using the internal schema (not the source-file naming).
+    df = _apply_dtypes(df, config)
 
     # Derive rpd/mean_conc (Replicate/Duplicate precision metrics) -- see
     # _derive_precision_metrics() docstring for why these can't just be a
@@ -250,20 +258,140 @@ def _load_file(data_path: Path) -> pd.DataFrame:
     return raw
 
 
-def _validate_required_columns(raw: pd.DataFrame, config: pd.DataFrame) -> None:
-    required = config[
-        config["required"].astype(str).str.lower().isin(["true", "1", "yes"])
-    ]["source_column"]
+def _column_key(name: object) -> str:
+    """
+    Return a comparison key for source-column matching.
 
-    missing = [col for col in required if col not in raw.columns]
+    This intentionally ignores case, spaces, underscores, hyphens and other
+    punctuation. For example, ANALYTE_CODE, "Analyte Code" and "analyte-code"
+    all resolve to the same key. This is useful because DataMine CSV and TSV
+    exports can contain equivalent fields under different naming conventions.
+    """
+    return re.sub(r"[^A-Z0-9]+", "", str(name).strip().upper())
+
+
+def _resolve_column_mappings(
+    raw: pd.DataFrame,
+    config: pd.DataFrame,
+) -> dict[str, str]:
+    """
+    Resolve raw CSV/TSV columns to stable internal column names.
+
+    `column_config.csv` may contain more than one source_column for the same
+    internal_column. This allows explicit CSV/TSV aliases without changing any
+    detector/visualiser code. Exact source-name matches take priority; if no
+    exact match exists, a normalised-name match is attempted.
+
+    Returns
+    -------
+    dict
+        {internal_column: actual_source_column}
+    """
+    raw_columns = list(raw.columns)
+    raw_set = set(raw_columns)
+
+    # A normalised key can theoretically map to more than one raw column.
+    # Keep all candidates so ambiguous mappings can be rejected safely.
+    keyed_raw: dict[str, list[str]] = {}
+    for col in raw_columns:
+        keyed_raw.setdefault(_column_key(col), []).append(col)
+
+    resolved: dict[str, str] = {}
+
+    # Preserve config order: it defines alias priority.
+    for internal, group in config.groupby("internal_column", sort=False):
+        aliases = [str(v).strip().upper() for v in group["source_column"]]
+
+        chosen: str | None = None
+
+        # Prefer an exact configured source name.
+        for alias in aliases:
+            if alias in raw_set:
+                chosen = alias
+                break
+
+        # Fall back to naming-convention normalisation.
+        if chosen is None:
+            for alias in aliases:
+                candidates = keyed_raw.get(_column_key(alias), [])
+                if len(candidates) == 1:
+                    chosen = candidates[0]
+                    break
+                if len(candidates) > 1:
+                    raise ValueError(
+                        f"Ambiguous source-column mapping for internal column "
+                        f"'{internal}': alias '{alias}' matches {candidates}."
+                    )
+
+        if chosen is not None:
+            resolved[str(internal)] = chosen
+            log.debug("Mapped source '%s' -> internal '%s'.", chosen, internal)
+
+    return resolved
+
+
+def _required_internal_columns(config: pd.DataFrame) -> list[str]:
+    """Return required fields at the internal-schema level."""
+    required_mask = config["required"].astype(str).str.lower().isin(
+        ["true", "1", "yes"]
+    )
+    return (
+        config.loc[required_mask, "internal_column"]
+        .astype(str)
+        .drop_duplicates()
+        .tolist()
+    )
+
+
+def _validate_required_columns(
+    config: pd.DataFrame,
+    resolved: dict[str, str],
+) -> None:
+    """
+    Validate required logical fields after CSV/TSV alias resolution.
+
+    A required internal field is valid when at least one configured source alias
+    resolves to it. This avoids incorrectly requiring both a CSV name and a TSV
+    name when they represent the same field.
+    """
+    required = _required_internal_columns(config)
+    missing = [internal for internal in required if internal not in resolved]
+
     if missing:
+        alias_details = {}
+        for internal in missing:
+            aliases = (
+                config.loc[
+                    config["internal_column"].astype(str) == internal,
+                    "source_column",
+                ]
+                .astype(str)
+                .tolist()
+            )
+            alias_details[internal] = aliases
+
         raise ValueError(
-            f"Required columns missing from source file: {missing}. "
-            "Check the export is a valid CCLAS 6 QC file, "
-            "or update column_config.csv to match the source column names."
+            "Required internal columns could not be mapped from the source "
+            f"file: {missing}. Configured aliases: {alias_details}. "
+            "Add the CSV/TSV source names to column_config.csv using the same "
+            "internal_column for equivalent fields."
         )
 
-    log.info("All required columns present.")
+    log.info("All required internal columns mapped successfully.")
+
+
+def _missing_optional_internal_columns(
+    config: pd.DataFrame,
+    resolved: dict[str, str],
+) -> list[str]:
+    """Return optional logical fields for which no CSV/TSV alias was found."""
+    required = set(_required_internal_columns(config))
+    all_internal = config["internal_column"].astype(str).drop_duplicates().tolist()
+    return [
+        internal
+        for internal in all_internal
+        if internal not in required and internal not in resolved
+    ]
 
 
 def _derive_precision_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -340,26 +468,19 @@ def _apply_dtypes(df: pd.DataFrame, config: pd.DataFrame) -> pd.DataFrame:
 # Usage
 # ---------------------------------------------------------------------------
 
-qc_data = load_qc_data(
-    data_path="data/raw/ResultSet.csv",
-    config_path="./config/column_config.csv",
-    supplementary_path="data/raw/QC_Anomaly_Training_Data_v2.xlsx"
-)
+if __name__ == "__main__":
+    qc_data = load_qc_data(
+        data_path="data/raw/ResultSet.csv",
+        config_path="./config/column_config.csv",
+        supplementary_path="data/raw/QC_Anomaly_Training_Data_v2.xlsx",
+    )
 
-# Display the first five rows
-print(qc_data.head())
+    print(qc_data.head())
+    print(qc_data.info())
+    print(qc_data.shape)
 
-# Show information about the DataFrame
-print(qc_data.info())
+    if "analytical_type" in qc_data.columns:
+        print(qc_data[qc_data["analytical_type"] == "Spike"].head())
+        print(qc_data["analytical_type"].value_counts())
 
-# Display the DataFrame dimensions (rows, columns)
-print(qc_data.shape)
-
-# See Matrix Spike rows
-print(qc_data[qc_data["analytical_type"] == "Spike"].head())
-
-# See all sample type counts
-print(qc_data["analytical_type"].value_counts())
-
-# See the last 5 rows (where appended data sits)
-print(qc_data.tail())
+    print(qc_data.tail())

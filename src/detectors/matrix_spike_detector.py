@@ -247,28 +247,42 @@ def load_ms_data(path_str: str, sheet_name: str = "SPK(MS) Assessment") -> pd.Da
 
 
 def filter_ms_records(raw: pd.DataFrame) -> pd.DataFrame:
-    """Filter to valid Matrix Spike records while preserving literal ``NA`` analytes.
-
-    Blank/missing analyte codes are excluded, but the literal string ``NA`` is
-    retained because it is a valid value in the source data/test contract.
     """
-    required = ["ANALYTICAL_TYPE", "QC_TYPE", "ANALYTE_CODE"]
-    missing = [c for c in required if c not in raw.columns]
+    Keep valid Spike/MS records.
+
+    Exclude missing, blank, or literal 'NA' analyte codes.
+    Do not modify the original DataFrame.
+    """
+    required = [
+        "ANALYTICAL_TYPE",
+        "QC_TYPE",
+        "ANALYTE_CODE",
+    ]
+
+    missing = [col for col in required if col not in raw.columns]
     if missing:
-        raise ValueError(f"MS detector: missing filter columns: {missing}")
+        raise ValueError(
+            f"MS detector: missing filter columns: {missing}"
+        )
 
     cleaned = raw.copy()
+
     for col in required:
-        cleaned[col] = cleaned[col].astype("string").str.strip()
+        cleaned[col] = (
+            cleaned[col]
+            .astype("string")
+            .str.strip()
+        )
 
     mask = (
         cleaned["ANALYTICAL_TYPE"].str.casefold().eq("spike")
         & cleaned["QC_TYPE"].str.casefold().eq("ms")
         & cleaned["ANALYTE_CODE"].notna()
         & cleaned["ANALYTE_CODE"].ne("")
+        & ~cleaned["ANALYTE_CODE"].str.casefold().eq("na")
     )
-    return cleaned.loc[mask].copy()
 
+    return cleaned.loc[mask.fillna(False)].copy()
 
 def validate_ms_frame(df: pd.DataFrame) -> None:
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
