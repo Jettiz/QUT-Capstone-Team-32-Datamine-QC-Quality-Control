@@ -1,23 +1,111 @@
 """
-Tests for src/data_validator.py's lowercase-internal-schema validators:
-validate_blank_data, validate_duplicate_data, validate_replicate_data,
-validate_matrix_spike_data. These four check data_loader.load_qc_data()'s
-output shape (lowercase internal columns) -- see the module docstring's
-"Column-naming convention" section for why these four differ from
-validate_lcs_data/validate_srm_data (which stay on raw uppercase columns,
-matching LCSDetector/SRMSDetector, and are covered by test_control_detector.py
-/ test_srms_detector.py instead).
+Tests for src/data_validator.py. Every validator checks
+data_loader.load_qc_data()'s output shape (lowercase internal columns).
+Also covers the LCS / SRMS routing of Standard rows (select_lcs_rows /
+select_srm_rows), which this module owns.
 """
 
 import pandas as pd
 import pytest
 
 from src.data_validator import (
+    select_lcs_rows,
+    select_srm_rows,
+    select_standard_rows,
     validate_blank_data,
     validate_duplicate_data,
+    validate_lcs_data,
     validate_replicate_data,
     validate_matrix_spike_data,
+    validate_srm_data,
 )
+
+
+# ── Routing: LCS vs SRMS ─────────────────────────────────────────────────
+
+def _standard_row(**overrides):
+    row = {
+        "analytical_type": "Standard",
+        "std_lot_code": "Sample",
+        "std_code": "OREAS_502C",
+        "scheme_code": "GE_ICP40Q12",
+        "job_code": "J1",
+        "analyte_code": "CU",
+        "analysed_date": pd.Timestamp("2024-01-01"),
+        "measured_value": 100.0,
+        "target_value": 100.0,
+        "limit_min": 90.0,
+        "limit_max": 110.0,
+        "limit_min_inclusive": "Y",
+        "limit_max_inclusive": "Y",
+        "limit_max_warning": 106.0,
+        "limit_min_warning": 94.0,
+        "limit_min_warning_inclusive": "Y",
+        "limit_max_warning_inclusive": "Y",
+        "unit_code": "MG_KG",
+        "specification_code": "OREAS_502C",
+    }
+    row.update(overrides)
+    return row
+
+
+def _routing_frame():
+    return pd.DataFrame([
+        _standard_row(std_lot_code="Sample"),                               # 0 LCS
+        _standard_row(std_lot_code=" sample "),                             # 1 LCS (case/space-insensitive)
+        _standard_row(std_lot_code="OREAS_905", std_code="OREAS_905"),      # 2 SRM
+        _standard_row(std_lot_code=None),                                   # 3 SRM (missing lot)
+        _standard_row(analytical_type="standard", std_lot_code="SAMPLE"),   # 4 LCS
+        _standard_row(analytical_type="Blank", std_lot_code="Sample"),      # 5 neither
+        _standard_row(analytical_type="Replicate", std_lot_code="Sample"),  # 6 neither
+    ])
+
+
+def test_sample_lot_standards_go_to_lcs_only():
+    df = _routing_frame()
+    assert select_lcs_rows(df).index.tolist() == [0, 1, 4]
+
+
+def test_other_standards_go_to_srm_only():
+    df = _routing_frame()
+    assert select_srm_rows(df).index.tolist() == [2, 3]
+
+
+def test_lcs_and_srm_partition_the_standard_rows():
+    df = _routing_frame()
+    lcs, srm = set(select_lcs_rows(df).index), set(select_srm_rows(df).index)
+    assert lcs.isdisjoint(srm)
+    assert lcs | srm == set(select_standard_rows(df).index)
+
+
+def test_routing_without_required_columns_returns_empty():
+    df = pd.DataFrame({"analyte_code": ["CU"]})
+    assert select_lcs_rows(df).empty and select_srm_rows(df).empty
+
+
+def test_validate_lcs_data_counts_only_lcs_rows():
+    report = validate_lcs_data(_routing_frame())
+    assert report["n_rows"] == 3
+    assert report["status"] is True
+
+
+def test_validate_lcs_data_requires_failure_limits():
+    df = _routing_frame().drop(columns=["limit_max"])
+    report = validate_lcs_data(df)
+    assert "limit_max" in report["missing_columns"]
+    assert report["status"] is False
+
+
+def test_validate_srm_data_counts_only_srm_rows():
+    report = validate_srm_data(_routing_frame())
+    assert report["n_rows"] == 2
+    assert report["null_counts"] == {"std_lot_code": 1}  # the row with a missing lot
+
+
+def test_validate_srm_data_flags_inverted_limit_span():
+    df = pd.DataFrame([_standard_row(std_lot_code="OREAS_905", limit_min=120.0)])
+    report = validate_srm_data(df)
+    assert report["invalid_limits"] == {"limit_min/limit_max": 1}
 
 
 # ── Blank ────────────────────────────────────────────────────────────────

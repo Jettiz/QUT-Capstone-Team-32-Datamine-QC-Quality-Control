@@ -1,83 +1,101 @@
 /**
- * ranking.js — pure severity-ranking logic. No DOM access, no dummy data.
+ * ranking.js — pure warning-state ranking logic. No DOM access, no data.
  *
- * Mirrors the real LCSDetector's severity ordering (_SEVERITY_RANK in
- * src/detectors/control_detector.py: CRITICAL=0, HIGH=1, MEDIUM=2, NONE=3,
- * lower = worse) with the same tie-break the detector's own detect_drift()
- * wrapper uses (severity_score = abs(OFFSET)).
+ * Mirrors src/qc_status.py's STATE_RANK (FAIL=0, WARNING=1, PASS=2, lower =
+ * worse) with the tie-break the server uses (larger `magnitude` first; for
+ * LCS that is |offset|).
  *
- * These functions operate on plain arrays/objects shaped like the records
- * from data.js (every detector's items share the same `severity`/
- * `magnitude` fields) -- they don't know or care which detector or
- * whether the data is dummy or real, which is what keeps this file
- * reusable across every detector type and across Phase 1 and Phase 2.
+ * Works on any items shaped like src/qc_report/contract.py's QCItem (real
+ * server items and data.js placeholders alike), so it never needs to know
+ * which QC method produced them.
  */
 window.LCSPoc = window.LCSPoc || {};
 
 window.LCSPoc.ranking = (function () {
   "use strict";
 
-  /** Lower rank number = more severe. Matches DRIFT_SEVERITY strings exactly. */
-  const SEVERITY_RANK = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, NONE: 3 };
+  const STATES = ["FAIL", "WARNING", "PASS"];
+  const STATE_RANK = { FAIL: 0, WARNING: 1, PASS: 2 };
+  const STATE_LABELS = { FAIL: "Fail", WARNING: "Warning", PASS: "Pass" };
 
-  /**
-   * Compares two items for sorting worst-first.
-   * Primary key: severity rank (lower number wins).
-   * Secondary key (tie-break): larger absolute magnitude wins.
-   * @param {Object} a
-   * @param {Object} b
-   * @returns {number} negative if a is worse (sorts first), positive if b is worse
-   */
-  function compareByPriority(a, b) {
-    const rankA = SEVERITY_RANK.hasOwnProperty(a.severity) ? SEVERITY_RANK[a.severity] : 9;
-    const rankB = SEVERITY_RANK.hasOwnProperty(b.severity) ? SEVERITY_RANK[b.severity] : 9;
-    if (rankA !== rankB) {
-      return rankA - rankB;
-    }
-    return Math.abs(b.magnitude) - Math.abs(a.magnitude);
+  function rankOf(state) {
+    return STATE_RANK.hasOwnProperty(state) ? STATE_RANK[state] : 9;
   }
 
   /**
-   * Returns a new array of items sorted worst (highest priority) first.
-   * @param {Array<Object>} items
-   * @returns {Array<Object>}
+   * Compares two items for sorting worst-first.
+   * Primary key: state rank (lower number wins).
+   * Secondary key (tie-break): larger absolute magnitude wins.
    */
+  function compareByPriority(a, b) {
+    const diff = rankOf(a.state) - rankOf(b.state);
+    if (diff !== 0) {
+      return diff;
+    }
+    return Math.abs(b.magnitude || 0) - Math.abs(a.magnitude || 0);
+  }
+
   function sortByPriority(items) {
     return items.slice().sort(compareByPriority);
   }
 
-  /**
-   * Returns the single highest-priority (most severe) item, or undefined
-   * if the input array is empty.
-   * @param {Array<Object>} items
-   * @returns {Object|undefined}
-   */
   function getHighestPriority(items) {
     return sortByPriority(items)[0];
   }
 
+  /** @returns {string} the worst state among `states` ("PASS" if empty) */
+  function worstState(states) {
+    return states.reduce(function (worst, s) { return rankOf(s) < rankOf(worst) ? s : worst; }, "PASS");
+  }
+
   /**
-   * Counts items by severity tier, e.g. {CRITICAL: 1, HIGH: 2, MEDIUM: 0,
-   * NONE: 1}. Used by the detector-summary page to show a count per
-   * detector without duplicating ranking logic there.
-   * @param {Array<Object>} items
-   * @returns {Object}
+   * Groups items by `code` (e.g. ANALYTE_CODE): one group per code, holding
+   * all its variants (e.g. one per scheme), the group's worst state and
+   * largest magnitude. Groups are returned worst-first.
+   * @returns {Array<{code: string, state: string, magnitude: number, items: Array<Object>}>}
    */
-  function countBySeverity(items) {
-    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, NONE: 0 };
+  function groupByCode(items) {
+    const byCode = {};
+    const order = [];
     items.forEach(function (item) {
-      if (counts.hasOwnProperty(item.severity)) {
-        counts[item.severity] += 1;
+      if (!byCode[item.code]) {
+        byCode[item.code] = [];
+        order.push(item.code);
+      }
+      byCode[item.code].push(item);
+    });
+    const groups = order.map(function (code) {
+      const groupItems = sortByPriority(byCode[code]);
+      return {
+        code: code,
+        state: groupItems[0].state,
+        magnitude: Math.abs(groupItems[0].magnitude || 0),
+        items: groupItems,
+      };
+    });
+    return groups.sort(compareByPriority);
+  }
+
+  /** Counts items per state, e.g. {FAIL: 1, WARNING: 2, PASS: 4}. */
+  function countByState(items) {
+    const counts = { FAIL: 0, WARNING: 0, PASS: 0 };
+    items.forEach(function (item) {
+      if (counts.hasOwnProperty(item.state)) {
+        counts[item.state] += 1;
       }
     });
     return counts;
   }
 
   return {
-    SEVERITY_RANK: SEVERITY_RANK,
+    STATES: STATES,
+    STATE_RANK: STATE_RANK,
+    STATE_LABELS: STATE_LABELS,
     compareByPriority: compareByPriority,
     sortByPriority: sortByPriority,
     getHighestPriority: getHighestPriority,
-    countBySeverity: countBySeverity,
+    worstState: worstState,
+    groupByCode: groupByCode,
+    countByState: countByState,
   };
 })();
