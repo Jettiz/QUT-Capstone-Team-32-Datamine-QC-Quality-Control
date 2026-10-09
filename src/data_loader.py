@@ -108,20 +108,13 @@ def load_qc_data(
     resolved = _resolve_column_mappings(raw, config)
     _validate_required_columns(config, resolved)
 
-    # Only report an optional internal column as absent when NONE of its
-    # source aliases is present (e.g. a missing JOB_NAME_ANON is fine when
-    # JOB_CODE provides job_code).
-    missing_optional = config[
-        (~config["internal_column"].isin(available["internal_column"])) &
-        (config["required"].astype(str).str.lower().isin(["false", "0", "no"]))
-    ]
-    if not missing_optional.empty:
-        log.warning(
-            "Optional columns not found, will be absent from output: %s",
-            missing_optional["source_column"].tolist(),
+    if not resolved:
+        raise ValueError(
+            "No configured source columns could be mapped from the input file. "
+            "Check column_config.csv against the CSV/TSV export."
         )
 
-    df = _map_to_internal_columns(raw, available)
+    df = _map_to_internal_columns(raw, config, resolved)
 
     missing_optional = _missing_optional_internal_columns(config, resolved)
     if missing_optional:
@@ -216,21 +209,27 @@ def _append_supplementary(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _map_to_internal_columns(raw: pd.DataFrame, available: pd.DataFrame) -> pd.DataFrame:
+def _map_to_internal_columns(
+    raw: pd.DataFrame,
+    config: pd.DataFrame,
+    resolved: dict[str, str],
+) -> pd.DataFrame:
     """
-    Build the internal-schema frame from the raw columns listed in
-    `available` (the column_config.csv rows whose source column is present).
+    Build the internal-schema frame from the source columns chosen by
+    _resolve_column_mappings() ({internal_column: source_column}).
 
-    A single source column is copied as-is. When several present source
-    columns share one internal column, they are coalesced row by row in
-    column_config.csv order: blank/whitespace-only values count as missing,
-    and the first non-missing value wins (see the module docstring).
+    The chosen source is copied as-is. When OTHER configured aliases of the
+    same internal column are also present in the export (exact names), they
+    fill the chosen column's blank rows, in column_config.csv order:
+    blank/whitespace-only values count as missing and the first non-missing
+    value wins (see the module docstring).
     """
     columns = {}
-    for internal, sources in available.groupby("internal_column", sort=False)["source_column"]:
-        sources = list(sources)
+    for internal, chosen in resolved.items():
+        aliases = config.loc[config["internal_column"] == internal, "source_column"].tolist()
+        sources = [chosen] + [a for a in aliases if a in raw.columns and a != chosen]
         if len(sources) == 1:
-            columns[internal] = raw[sources[0]]
+            columns[internal] = raw[chosen]
             continue
 
         merged = None
