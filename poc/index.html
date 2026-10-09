@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Load Sample — Proof of Concept</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -18,15 +19,17 @@
   <header class="page-header">
     <h1>Load a Sample</h1>
     <p class="subtitle">
-      Phase 1 proof of concept &mdash; pick a real local CSV (e.g. one of the files
-      under <code>data/samples/</code>) to see which QC detectors have the columns
-      and row types they need to run. This runs entirely in your browser
-      (the File API) &mdash; nothing is uploaded anywhere, and no backend is
-      involved. It mirrors, in simplified form, what
-      <code>src/data_loader.py</code> and <code>src/data_validator.py</code>
-      do on the real pipeline.
+      Pick a CCLAS CSV export (e.g. <code>data/raw/ResultSet.csv</code> or one of the files under
+      <code>data/samples/</code>). The local server loads it with <code>src/data_loader.py</code>,
+      validates it with <code>src/data_validator.py</code> and runs the real QC analysis for the
+      connected detectors (currently Control / LCS). Nothing leaves your computer.
     </p>
   </header>
+
+  <p id="server-banner" class="server-banner" hidden>
+    This page was opened directly from disk, so the real analysis cannot run. Start the local server
+    with <code>python poc/server.py</code> and open <code>http://localhost:8000</code>.
+  </p>
 
   <main class="load-layout">
     <section class="load-panel">
@@ -35,6 +38,27 @@
         <input type="file" id="sample-file" accept=".csv,text/csv" />
         <button type="button" id="analyse-button">Analyse sample</button>
       </div>
+
+      <fieldset class="history-toggle">
+        <legend>History</legend>
+        <label>
+          <input type="radio" name="history-mode" value="on" checked />
+          Use history
+          <span class="option-help">
+            The file's jobs are put in date order; the older half becomes the history and the newer
+            half is analysed against it. The history is rebuilt (and stored) on every run.
+          </span>
+        </label>
+        <label>
+          <input type="radio" name="history-mode" value="off" />
+          No history
+          <span class="option-help">
+            Nothing is stored. Each job is only compared with earlier jobs in the same file.
+          </span>
+        </label>
+      </fieldset>
+
+      <p id="load-status" class="status-message" hidden></p>
       <p id="load-error" class="error-message" hidden></p>
     </section>
 
@@ -47,6 +71,8 @@
         <dd data-field="row-count"></dd>
         <dt>Columns found</dt>
         <dd data-field="column-count"></dd>
+        <dt>History</dt>
+        <dd data-field="history-mode"></dd>
       </dl>
 
       <h3>Which detectors can use this data?</h3>
@@ -63,13 +89,14 @@
 
   <footer class="page-footer">
     <p>
-      All checks on this page run locally in your browser. Matrix Spike Duplicate is
-      not listed &mdash; that sample type has been removed from this project.
+      LCS rows are Standard rows with STD_LOT_CODE "Sample"; all other Standard rows go to SRM.
+      Matrix Spike Duplicate is not listed &mdash; it has been removed from this project.
     </p>
   </footer>
 
   <script src="data.js" defer></script>
   <script src="rows.js" defer></script>
+  <script src="api.js" defer></script>
   <script src="report-store.js" defer></script>
   <script src="load.js" defer></script>
 </body>

@@ -1,3 +1,21 @@
+"""
+Data Loader Module
+
+Loads a raw QC export (CCLAS ResultSet.csv, QC_Sample_Data.csv, ...) and maps
+it onto the product's INTERNAL column names, as defined by
+config/column_config.csv (source_column -> internal_column, dtype, required).
+Everything downstream (data_validator.py, the detectors that have been
+migrated, the POC server) works on these internal names only.
+
+Several source columns may map to the same internal column when different
+exports name the same field differently, e.g.:
+    JOB_NAME_ANON, JOB_CODE           -> job_code
+    INSTRUMENT_CODE, INSTRUMENT_ID    -> instrument_id
+The ROW ORDER of column_config.csv is the priority: per row, the first listed
+source column that has a non-blank value wins, and the next one is only used
+as a fallback where the preferred one is missing/blank.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -85,8 +103,11 @@ def load_qc_data(
     # Select and rename to internal column names
     available = config[config["source_column"].isin(raw.columns)].copy()
 
+    # Only report an optional internal column as absent when NONE of its
+    # source aliases is present (e.g. a missing JOB_NAME_ANON is fine when
+    # JOB_CODE provides job_code).
     missing_optional = config[
-        (~config["source_column"].isin(raw.columns)) &
+        (~config["internal_column"].isin(available["internal_column"])) &
         (config["required"].astype(str).str.lower().isin(["false", "0", "no"]))
     ]
     if not missing_optional.empty:
@@ -95,9 +116,7 @@ def load_qc_data(
             missing_optional["source_column"].tolist(),
         )
 
-    df = raw[available["source_column"]].copy()
-    rename_map = dict(zip(available["source_column"], available["internal_column"]))
-    df = df.rename(columns=rename_map)
+    df = _map_to_internal_columns(raw, available)
 
     # Apply data types
     df = _apply_dtypes(df, available)
@@ -184,6 +203,34 @@ def _append_supplementary(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _map_to_internal_columns(raw: pd.DataFrame, available: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build the internal-schema frame from the raw columns listed in
+    `available` (the column_config.csv rows whose source column is present).
+
+    A single source column is copied as-is. When several present source
+    columns share one internal column, they are coalesced row by row in
+    column_config.csv order: blank/whitespace-only values count as missing,
+    and the first non-missing value wins (see the module docstring).
+    """
+    columns = {}
+    for internal, sources in available.groupby("internal_column", sort=False)["source_column"]:
+        sources = list(sources)
+        if len(sources) == 1:
+            columns[internal] = raw[sources[0]]
+            continue
+
+        merged = None
+        for source in sources:
+            values = raw[source]
+            blank = values.isna() | values.astype(str).str.strip().eq("")
+            values = values.mask(blank)
+            merged = values if merged is None else merged.fillna(values)
+        columns[internal] = merged
+
+    return pd.DataFrame(columns, index=raw.index)
+
 
 def _drop_unnamed_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Drop empty or unnamed columns produced by Excel exports."""
@@ -337,29 +384,30 @@ def _apply_dtypes(df: pd.DataFrame, config: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Usage
+# Usage (only when run directly -- importing this module must not load data)
 # ---------------------------------------------------------------------------
 
-qc_data = load_qc_data(
-    data_path="data/raw/ResultSet.csv",
-    config_path="./config/column_config.csv",
-    supplementary_path="data/raw/QC_Anomaly_Training_Data_v2.xlsx"
-)
+if __name__ == "__main__":
+    qc_data = load_qc_data(
+        data_path="data/raw/ResultSet.csv",
+        config_path="./config/column_config.csv",
+        supplementary_path="data/raw/QC_Anomaly_Training_Data_v2.xlsx"
+    )
 
-# Display the first five rows
-print(qc_data.head())
+    # Display the first five rows
+    print(qc_data.head())
 
-# Show information about the DataFrame
-print(qc_data.info())
+    # Show information about the DataFrame
+    print(qc_data.info())
 
-# Display the DataFrame dimensions (rows, columns)
-print(qc_data.shape)
+    # Display the DataFrame dimensions (rows, columns)
+    print(qc_data.shape)
 
-# See Matrix Spike rows
-print(qc_data[qc_data["analytical_type"] == "Spike"].head())
+    # See Matrix Spike rows
+    print(qc_data[qc_data["analytical_type"] == "Spike"].head())
 
-# See all sample type counts
-print(qc_data["analytical_type"].value_counts())
+    # See all sample type counts
+    print(qc_data["analytical_type"].value_counts())
 
-# See the last 5 rows (where appended data sits)
-print(qc_data.tail())
+    # See the last 5 rows (where appended data sits)
+    print(qc_data.tail())

@@ -9,21 +9,22 @@
  * data/raw/QC_Anomaly_Training_Data_v2.xlsx, 6,958 rows):
  *   STANDARD_STATUS  -> populates Blank / Standard / Spike rows
  *   PRECISION_STATUS -> populates Replicate / Duplicate rows
- * Both map onto the same small vocabulary (confirmed exhaustively against the
- * real data -- these are ALL the distinct non-null values that exist):
- *   Pass                                    -> Pass
- *   UpperWarning / LowerWarning / Warning    -> Medium
- *   UpperFailure / LowerFailure / Failure    -> Critical
- *   Ignored{Upper,Lower}Failure / IgnoreFailure -> Critical (a chemist
+ * Both map onto the POC's three warning states (confirmed exhaustively
+ * against the real data -- these are ALL the distinct non-null values):
+ *   Pass                                    -> PASS
+ *   UpperWarning / LowerWarning / Warning    -> WARNING
+ *   UpperFailure / LowerFailure / Failure    -> FAIL
+ *   Ignored{Upper,Lower}Failure / IgnoreFailure -> FAIL (a chemist
  *     reviewed and dispositioned it, but it's still a real limit breach)
  * ~0.035% of real rows have neither column populated -- these (and any
- * unrecognised status string) get a 5th tag, UNKNOWN, ranked worst-last.
+ * unrecognised status string) get a 4th tag, UNKNOWN, ranked worst-last.
+ * These tags are the company's EXISTING point check (STANDARD_STATUS /
+ * PRECISION_STATUS), not the result of this project's detectors.
  *
- * NOTE: with this mapping, "HIGH" is never actually produced by real data
- * (only CRITICAL/MEDIUM/PASS are reachable, plus UNKNOWN for the gap). It's
- * kept in the tag vocabulary anyway for consistency with the rest of the
- * app (ranking.js's SEVERITY_RANK also has CRITICAL/HIGH/MEDIUM), but a
- * "High" filter will currently always show "no rows match" against real data.
+ * Standard rows are split into LCS (STD_LOT_CODE == "Sample") and SRM (every
+ * other Standard row), mirroring src/data_validator.py's select_lcs_rows() /
+ * select_srm_rows() -- that Python code is the source of truth; this is only
+ * the browser-side preview of the same rule.
  *
  * Rows are bucketed three-deep: type -> tag -> analyte code. This is what
  * lets "top 15" stay correct no matter which of the three dimensions a user
@@ -43,6 +44,7 @@ window.LCSPoc.rows = (function () {
   // "ANALYTICAL_TYPE" string being duplicated/drifting across load.js.
   const COLUMN_NAMES = {
     analyticalType: "ANALYTICAL_TYPE",
+    stdLotCode: "STD_LOT_CODE",
     standardStatus: "STANDARD_STATUS",
     precisionStatus: "PRECISION_STATUS",
     analyteCode: "ANALYTE_CODE",
@@ -50,12 +52,23 @@ window.LCSPoc.rows = (function () {
 
   // Worst-first order -- this exact array drives both table sort order and
   // dropdown option order everywhere.
-  const TAGS = ["CRITICAL", "HIGH", "MEDIUM", "PASS", "UNKNOWN"];
-  const TAG_LABELS = { CRITICAL: "Critical", HIGH: "High", MEDIUM: "Medium", PASS: "Pass", UNKNOWN: "Unknown" };
+  const TAGS = ["FAIL", "WARNING", "PASS", "UNKNOWN"];
+  const TAG_LABELS = { FAIL: "Fail", WARNING: "Warning", PASS: "Pass", UNKNOWN: "Unknown" };
 
-  // Matches data.js's DETECTORS[*].analyticalTypeFilter values exactly.
-  const KNOWN_TYPES = ["Blank", "Standard", "Replicate", "Duplicate", "Spike"];
-  const TYPE_LABELS = { Blank: "Blank", Standard: "Standard (Control/SRM)", Replicate: "Replicate", Duplicate: "Duplicate", Spike: "Matrix Spike" };
+  // Canonical row types; data.js's DETECTORS[*].rowType values are drawn
+  // from this list. "Standard" rows are split into LCS and SRM.
+  const KNOWN_TYPES = ["Blank", "LCS", "SRM", "Replicate", "Duplicate", "Spike"];
+  const TYPE_LABELS = {
+    Blank: "Blank",
+    LCS: "Standard: LCS (lot \"Sample\")",
+    SRM: "Standard: SRM (other lots)",
+    Replicate: "Replicate",
+    Duplicate: "Duplicate",
+    Spike: "Matrix Spike",
+  };
+  // Raw ANALYTICAL_TYPE values that map directly onto a canonical type.
+  const DIRECT_TYPES = ["Blank", "Replicate", "Duplicate", "Spike"];
+  const LCS_STD_LOT_CODE = "SAMPLE";
   // OTHER catches rows whose ANALYTICAL_TYPE is missing/blank/unrecognised,
   // including every row when there's no ANALYTICAL_TYPE column at all. Never
   // offered as a dropdown option; only swept in when the type filter is ALL.
@@ -75,26 +88,31 @@ window.LCSPoc.rows = (function () {
 
   const STATUS_VALUE_TAG_MAP = {
     PASS: "PASS",
-    UPPERWARNING: "MEDIUM",
-    LOWERWARNING: "MEDIUM",
-    WARNING: "MEDIUM",
-    UPPERFAILURE: "CRITICAL",
-    LOWERFAILURE: "CRITICAL",
-    FAILURE: "CRITICAL", // PRECISION_STATUS's plain "Failure" (no Upper/Lower split, unlike STANDARD_STATUS)
-    IGNOREDUPPERFAILURE: "CRITICAL",
-    IGNOREDLOWERFAILURE: "CRITICAL",
-    IGNOREFAILURE: "CRITICAL",
+    UPPERWARNING: "WARNING",
+    LOWERWARNING: "WARNING",
+    WARNING: "WARNING",
+    UPPERFAILURE: "FAIL",
+    LOWERFAILURE: "FAIL",
+    FAILURE: "FAIL", // PRECISION_STATUS's plain "Failure" (no Upper/Lower split, unlike STANDARD_STATUS)
+    IGNOREDUPPERFAILURE: "FAIL",
+    IGNOREDLOWERFAILURE: "FAIL",
+    IGNOREFAILURE: "FAIL",
   };
 
   /**
-   * Maps a raw ANALYTICAL_TYPE string to one of KNOWN_TYPES, or "OTHER" if
-   * missing/blank/unrecognised.
+   * Maps a row to one of KNOWN_TYPES, or "OTHER" if its ANALYTICAL_TYPE is
+   * missing/blank/unrecognised. Standard rows become "LCS" when STD_LOT_CODE
+   * is "Sample" (case-insensitive) and "SRM" otherwise.
    * @param {string} rawAnalyticalType
+   * @param {string} rawStdLotCode
    * @returns {string}
    */
-  function classifyRowType(rawAnalyticalType) {
+  function classifyRowType(rawAnalyticalType, rawStdLotCode) {
     const normalised = String(rawAnalyticalType || "").trim().toUpperCase();
-    const match = KNOWN_TYPES.find(function (t) { return t.toUpperCase() === normalised; });
+    if (normalised === "STANDARD") {
+      return String(rawStdLotCode || "").trim().toUpperCase() === LCS_STD_LOT_CODE ? "LCS" : "SRM";
+    }
+    const match = DIRECT_TYPES.find(function (t) { return t.toUpperCase() === normalised; });
     return match || "OTHER";
   }
 
@@ -124,7 +142,7 @@ window.LCSPoc.rows = (function () {
     if (canonicalType === "Replicate" || canonicalType === "Duplicate") {
       return precisionStatusRaw || "";
     }
-    if (canonicalType === "Blank" || canonicalType === "Standard" || canonicalType === "Spike") {
+    if (canonicalType === "Blank" || canonicalType === "LCS" || canonicalType === "SRM" || canonicalType === "Spike") {
       return standardStatusRaw || "";
     }
     return standardStatusRaw || precisionStatusRaw || "";
@@ -239,7 +257,7 @@ window.LCSPoc.rows = (function () {
    * exceed the sample size).
    *
    * Correctness guarantee: since buckets are kept at the full (type, tag,
-   * analyte) granularity, every one of the 6x6x(analytes+1) selectable
+   * analyte) granularity, every one of the 7x5x(analytes+1) selectable
    * filter combinations reduces to summing/concatenating a set of these
    * leaf buckets -- each of which independently holds every real row when
    * its true count is <= bucketCap, and is never asked for more than

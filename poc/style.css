@@ -1,6 +1,10 @@
-/* style.css — all presentation for the Control sample POC.
+/* style.css — all presentation for the QC POC.
  * No logic lives here; this file only reacts to attributes/classes that
- * app.js / render.js set (e.g. aria-pressed, severity-* classes). */
+ * app.js / render.js set (e.g. aria-pressed, state-* classes).
+ *
+ * Three warning states (src/qc_status.py): FAIL / WARNING / PASS. The
+ * hues match the charts drawn by src/visualisers (status palette); text on
+ * amber/green uses dark ink so badges stay readable. */
 
 :root {
   --color-bg: #f7f7f5;
@@ -10,15 +14,22 @@
   --color-muted: #5b6360;
   --color-accent: #2f6f5e;
 
-  --color-critical: #d03b3b;
-  --color-high: #ec835a;
-  --color-medium: #d9a300;
-  --color-none: #1a8a3d;
+  --color-fail: #d03b3b;
+  --color-fail-text: #ffffff;
+  --color-warning: #fab219;
+  --color-warning-text: #2a2200;
+  --color-pass: #0ca30c;
+  --color-pass-text: #04260a;
   --color-unknown: #7a7a7a;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* The `hidden` attribute must win over any display rule below. */
+[hidden] {
+  display: none !important;
 }
 
 body {
@@ -116,7 +127,7 @@ body {
   margin: 0;
 }
 
-.severity-badge {
+.state-badge {
   display: inline-block;
   padding: 2px 10px;
   border-radius: 999px;
@@ -126,27 +137,123 @@ body {
   background: var(--color-unknown);
 }
 
-.severity-badge.severity-critical {
-  background: var(--color-critical);
+.state-badge.state-fail {
+  background: var(--color-fail);
+  color: var(--color-fail-text);
 }
 
-.severity-badge.severity-high {
-  background: var(--color-high);
+.state-badge.state-warning {
+  background: var(--color-warning);
+  color: var(--color-warning-text);
 }
 
-.severity-badge.severity-medium {
-  background: var(--color-medium);
-  color: #2a2200;
+.state-badge.state-pass {
+  background: var(--color-pass);
+  color: var(--color-pass-text);
 }
 
-.severity-badge.severity-none {
-  background: var(--color-none);
+.status-detail {
+  margin-left: 8px;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+.reason-text {
+  margin: 0 0 12px;
 }
 
 #item-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.controls-hint {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+/* Job + instrument header (Steps 2 and 3) */
+.context-bar {
+  max-width: 960px;
+  margin: 0 auto 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 10px 16px;
+}
+
+.context-bar .context-item {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.context-bar .context-label {
+  font-weight: 600;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.context-bar select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  max-width: 100%;
+}
+
+/* Scheme (variant) tabs when one analyte has several results in a job */
+.variant-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.variant-tab {
+  appearance: none;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.variant-tab[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  font-weight: 600;
+}
+
+.variant-tab .state-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--color-unknown);
+}
+
+.state-dot.state-fail { background: var(--color-fail); }
+.state-dot.state-warning { background: var(--color-warning); }
+.state-dot.state-pass { background: var(--color-pass); }
+
+.notice-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 0.85rem;
+  color: var(--color-muted);
 }
 
 .analyte-button {
@@ -176,25 +283,28 @@ body {
   color: #fff;
 }
 
-.analyte-button.severity-critical[aria-pressed="true"] {
-  background: var(--color-critical);
-  border-color: var(--color-critical);
+/* Unselected buttons show their state as a coloured left edge, so the
+ * state is visible for every analyte, not only the selected one. */
+.analyte-button.state-fail { box-shadow: inset 4px 0 0 var(--color-fail); }
+.analyte-button.state-warning { box-shadow: inset 4px 0 0 var(--color-warning); }
+.analyte-button.state-pass { box-shadow: inset 4px 0 0 var(--color-pass); }
+
+.analyte-button.state-fail[aria-pressed="true"] {
+  background: var(--color-fail);
+  border-color: var(--color-fail);
+  color: var(--color-fail-text);
 }
 
-.analyte-button.severity-high[aria-pressed="true"] {
-  background: var(--color-high);
-  border-color: var(--color-high);
+.analyte-button.state-warning[aria-pressed="true"] {
+  background: var(--color-warning);
+  border-color: var(--color-warning);
+  color: var(--color-warning-text);
 }
 
-.analyte-button.severity-medium[aria-pressed="true"] {
-  background: var(--color-medium);
-  border-color: var(--color-medium);
-  color: #2a2200;
-}
-
-.analyte-button.severity-none[aria-pressed="true"] {
-  background: var(--color-none);
-  border-color: var(--color-none);
+.analyte-button.state-pass[aria-pressed="true"] {
+  background: var(--color-pass);
+  border-color: var(--color-pass);
+  color: var(--color-pass-text);
 }
 
 .page-footer {
@@ -270,7 +380,7 @@ body {
 
 .error-message {
   color: #fff;
-  background: var(--color-critical);
+  background: var(--color-fail);
   border-radius: 6px;
   padding: 10px 14px;
   margin-top: 12px;
@@ -302,11 +412,51 @@ body {
 }
 
 .usable-badge.usable-yes {
-  background: var(--color-none);
+  background: var(--color-pass);
+  color: var(--color-pass-text);
 }
 
 .usable-badge.usable-no {
-  background: var(--color-critical);
+  background: var(--color-fail);
+}
+
+.history-toggle {
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.history-toggle legend {
+  font-weight: 600;
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.history-toggle label {
+  display: block;
+  margin: 4px 0;
+}
+
+.history-toggle .option-help {
+  display: block;
+  margin-left: 24px;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.server-banner {
+  max-width: 720px;
+  margin: 0 auto 16px;
+  background: #fff6dc;
+  border: 1px solid var(--color-warning);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.status-message {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+  margin: 10px 0 0;
 }
 
 #analyse-button,
@@ -325,6 +475,7 @@ body {
   display: inline-block;
 }
 
+#analyse-button:disabled,
 #continue-button:disabled,
 .detector-card-button:disabled {
   background: var(--color-border);
@@ -357,6 +508,15 @@ body {
 
 .detector-card h3 {
   margin: 0;
+}
+
+.detector-card .usable-badge {
+  align-self: flex-start;
+}
+
+#summary-content > .subtitle {
+  max-width: 960px;
+  margin: 0 auto 12px;
 }
 
 .detector-card-disabled {
@@ -507,10 +667,61 @@ body {
   white-space: normal;
 }
 
-.severity-badge.severity-pass {
-  background: var(--color-none);
+.state-badge.state-unknown {
+  background: var(--color-unknown);
 }
 
-.severity-badge.severity-unknown {
-  background: var(--color-unknown);
+/* ---------------------------------------------------------------------- */
+/* Page 2: per-method results by job                                      */
+/* ---------------------------------------------------------------------- */
+
+.method-results {
+  max-width: 960px;
+  margin: 20px auto 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 16px 20px 20px;
+}
+
+.method-results h2 {
+  margin-top: 0;
+  font-size: 1.05rem;
+}
+
+.job-table-scroll {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.job-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.job-table th,
+.job-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.job-table thead th {
+  background: var(--color-bg);
+  position: sticky;
+  top: 0;
+}
+
+.job-table td.count-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.job-table a {
+  color: var(--color-accent);
+  font-weight: 600;
 }

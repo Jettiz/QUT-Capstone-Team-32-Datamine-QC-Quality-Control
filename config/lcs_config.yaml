@@ -2,23 +2,30 @@
 #
 # Keys read by src/detectors/control_detector.py (LCSDetector). Matches the
 # approach in notebooks/LCS_drift_detection_historic.ipynb: a persistent,
-# per-(ANALYTE_CODE, STD_CODE, SCHEME_CODE) rolling history, scaled so
-# target -> 0 and the failure limit -> +/-1.
+# per-(analyte_code, std_code, scheme_code) rolling history, scaled so
+# target -> 0 and the failure limit -> +/-1. Which rows count as LCS is
+# decided by src/data_validator.select_lcs_rows(), not here.
 
 # Where the persisted rolling history is stored (CSV, one row per retained
 # historical observation).
 history_path: data/processed/lcs_standard_history.csv
 
-# STD_CODE values that are not genuine reference-material identifiers and
+# Separate history store used by the proof of concept (poc/server.py) when
+# its "Use history" toggle is on. It is rebuilt from the uploaded file on
+# every run, so it must never point at history_path.
+demo_history_path: data/processed/lcs_history_poc.csv
+
+# std_code values that are not genuine reference-material identifiers and
 # must be excluded before history is ever built.
 excluded_std_codes: ["", "Sample", "TSV_BLANK"]
 
-# Maximum retained historical observations per (ANALYTE_CODE, STD_CODE,
-# SCHEME_CODE) group.
+# Maximum retained historical observations per (analyte_code, std_code,
+# scheme_code) group.
 max_history_per_analyte: 30
 
-# Below this many valid historical observations: point status only,
-# INSUFFICIENT_HISTORY for trend.
+# Below this many observations (including the one being evaluated): the
+# latest result is still checked against its limits (point status), but no
+# trend is assessed; a within-limits result is reported INSUFFICIENT_HISTORY.
 min_history_point: 3
 
 # Below this many (but >= min_history_point): trend is computed but reported
