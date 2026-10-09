@@ -87,10 +87,9 @@ OUTPUT_COLUMNS = [
 # Configuration
 # ---------------------------------------------------------------------------
 
-PROJECT_ROOT        = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "matrix_spike_config.yaml"
-DEFAULT_OUTPUT_DIR  = PROJECT_ROOT / "ms_outputs"
-
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "ms_outputs"
 
 @dataclass(frozen=True)
 class MSConfig:
