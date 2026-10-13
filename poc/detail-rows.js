@@ -4,29 +4,21 @@
  *
  * Deliberately a SEPARATE, additive DOMContentLoaded listener from app.js:
  * it touches only the #row-sample-section subtree, never app.js's
- * #viz-panel/#controls-panel, so the existing dummy-item viewer keeps
- * working exactly as before regardless of anything in this file. It
- * duplicates app.js's small URL-parsing helper locally rather than reaching
- * into app.js's private IIFE, per this POC's existing "small, focused
- * files" convention.
+ * #viz-panel/#controls-panel. It duplicates app.js's small URL-parsing
+ * helper locally rather than reaching into app.js's private IIFE, per this
+ * POC's "small, focused files" convention.
  *
- * The sample-type filter is fixed to detector.analyticalTypeFilter -- the
- * exact same field load.js's own usability check keys off -- and rendered
- * as a plain label (table.js's renderLockedTypeLabel), never a <select>, so
- * there is no way to change or remove it here: the whole point is
- * preventing a user from accidentally viewing another sample type's rows
- * while looking at one detector's page.
+ * The sample-type filter is fixed to detector.rowType -- the exact same
+ * field load.js's own usability check keys off (e.g. "LCS" for Control, so
+ * SRM Standard rows never appear here) -- and rendered as a plain label
+ * (table.js's renderLockedTypeLabel), never a <select>, so a user can't
+ * accidentally view another sample type's rows on one detector's page.
  *
  * The Analyte filter's "Currently shown" / "Others" grouping tracks
- * whichever dummy item app.js currently has active in the visualisation
- * panel. Rather than reaching into app.js's private state, this reads the
- * DOM it already renders (#panel-code's textContent, written by
- * render.js's renderActivePanel()) and adds its OWN click listener on
- * #item-controls -- since script tags run in document order and
- * DOMContentLoaded listeners fire in registration order, app.js's listener
- * (registered first, in the earlier script block) always finishes updating
- * #panel-code before this file's listener (registered after) reads it, so
- * this never sees a stale value.
+ * whichever analyte app.js currently shows. Rather than reaching into
+ * app.js's private state, this reads the DOM it renders (#panel-code) each
+ * time app.js fires its "lcspoc:selectionchange" event (analyte button,
+ * scheme tab or job change).
  */
 (function () {
   "use strict";
@@ -66,7 +58,7 @@
     }
   }
 
-  /** @returns {string} the analyte code currently shown in the dummy viz panel */
+  /** @returns {string} the analyte code currently shown in the analysis panel */
   function getCurrentlyShownCode() {
     return document.getElementById("panel-code").textContent.trim();
   }
@@ -119,7 +111,7 @@
     document.getElementById("no-row-sample-message").hidden = true;
     document.getElementById("row-sample-content").hidden = false;
 
-    const lockedType = detector.analyticalTypeFilter;
+    const lockedType = detector.rowType;
     renderRowSampleNote(report);
     window.LCSPoc.table.renderLockedTypeLabel(document.getElementById("row-type-locked"), lockedType);
 
@@ -136,20 +128,12 @@
       refresh(report, lockedType);
     });
 
-    // Re-group "Currently shown"/"Others" whenever the dummy viz panel's
-    // active item changes. Registered after app.js's own #item-controls
-    // listener (this script loads later in detail.html), so #panel-code is
-    // already up to date by the time this runs.
-    const itemControls = document.getElementById("item-controls");
-    if (itemControls) {
-      itemControls.addEventListener("click", function (event) {
-        if (!event.target.closest("button[data-item-code]")) {
-          return;
-        }
-        refreshAnalyteDropdown(report, lockedType);
-        refresh(report, lockedType);
-      });
-    }
+    // Re-group "Currently shown"/"Others" whenever app.js shows another
+    // analyte (it updates #panel-code before firing this event).
+    document.addEventListener("lcspoc:selectionchange", function () {
+      refreshAnalyteDropdown(report, lockedType);
+      refresh(report, lockedType);
+    });
 
     refresh(report, lockedType);
   }

@@ -23,7 +23,7 @@ A lab export contains several distinct QC sample types, identified by the `ANALY
 
 ### Methods applied
 
-- **Control (LCS) drift detection** (`src/detectors/control_detector.py`) — maintains a persistent, per-analyte rolling history (up to 30 past observations) and scales each new result against its own target/limits (target → 0, failure limit → ±1). Every result is classified on two axes: has it **already breached** a limit right now (a direct point check), and is a robust trend (Theil-Sen slope, resistant to single outliers) over recent history **heading toward** a limit (a predictive check). The two combine into one severity ladder: `Critical > High > Medium > None`.
+- **Control (LCS) drift detection** (`src/detectors/control_detector.py`, reference: `notebooks/LCS_drift_detection_historic.ipynb`) — analyses Standard rows whose `STD_LOT_CODE` is `Sample` (every other Standard row goes to SRM; the split lives in `src/data_validator.py`). Jobs are processed in date order against a per-analyte rolling history (up to 30 observations, de-duplicated) and each result is scaled against its own target/limits (target → 0, failure limit → ±1). Each analyte is classified on two axes: has it **already breached** a limit (point check, always applied), and is a robust trend (Theil-Sen slope, resistant to single outliers) over recent history **heading toward** a limit. The outcome maps to three states: **Fail** (outside the failure limits), **Warning** (in the warning band or trending toward a limit) and **Pass**.
 - **SRM anomaly detection** (`src/detectors/srms_detector.py`) — extracts SRM-candidate results, computes statistical features (deviation %, robust Z-score, rolling drift, distance to limits), applies explainable rule-based flags, and combines them with an unsupervised Isolation Forest model into a prioritised `Low / Medium / High / Critical` risk score.
 - **Blank, Duplicate, Replicate, Matrix Spike** — data validation (required columns present, correctly typed, complete) is implemented for all four in `src/data_validator.py`. Anomaly-detection logic for these is planned but not yet implemented (see Project status).
 
@@ -31,7 +31,7 @@ A lab export contains several distinct QC sample types, identified by the `ANALY
 
 | Sample type | Data validation | Anomaly detection | Chart generation |
 |---|---|---|---|
-| Control (LCS) | ✅ | ✅ | ✅ |
+| Control (LCS) | ✅ | ✅ (in the POC) | ✅ |
 | SRM | ✅ | ✅ | — |
 | Blank | ✅ | 🔲 planned | — |
 | Duplicate | ✅ | 🔲 planned | — |
@@ -51,9 +51,12 @@ A lab export contains several distinct QC sample types, identified by the `ANALY
 │   └── samples/         # Small scenario-based fixtures (Pass/Warn/Fail/Ignored per type)
 ├── notebooks/          # Exploratory analysis + reusable test-harness notebooks
 ├── poc/                # Client-side proof-of-concept report (see below)
+├── docs/               # QC_INTEGRATION_GUIDE.md: how to add a QC method to the POC
 ├── src/
-│   ├── data_loader.py    # Loads a raw export and normalises it to one internal schema
-│   ├── data_validator.py # Validates each sample type's data ahead of detection
+│   ├── data_loader.py    # Loads a raw export and maps it to the internal column names
+│   ├── data_validator.py # Validates each sample type's data + routes Standard rows (LCS vs SRM)
+│   ├── qc_status.py      # The three shared warning states: FAIL / WARNING / PASS
+│   ├── qc_report/        # Result contract + registry + per-method adapters used by the POC
 │   ├── detectors/        # One anomaly detector per sample type
 │   └── visualisers/      # One chart generator per sample type
 ├── tests/              # pytest suite
@@ -62,22 +65,24 @@ A lab export contains several distinct QC sample types, identified by the `ANALY
 
 ### Proof-of-concept report (`poc/`)
 
-A static, browser-only preview of the intended report experience — plain HTML/CSS/JS, no backend, no build step. It demonstrates the full intended flow end-to-end using a mix of real and dummy data:
+A small local web app: plain HTML/CSS/JS pages served by a standard-library Python server (`poc/server.py`, no extra dependencies) that runs the real analysis from `src/`. Control (LCS) shows real results; the other detectors show placeholder data until they are integrated (see `docs/QC_INTEGRATION_GUIDE.md`).
 
-1. **Load a sample** (`index.html`) — pick a real local CSV; the browser checks (client-side) which detectors have the columns and row types they need to run against that file.
-2. **Detector overview** (`summary.html`) — one card per sample type showing whether it's usable against the loaded file, plus a real-data table (filterable by sample type, detected-issue severity, and analyte) so the underlying rows can be visually sanity-checked.
-3. **Detail** (`detail.html`) — a per-sample-type anomaly viewer. Its sample-type filter is permanently locked (not just disabled) so there's no way to accidentally view another sample type's data while reviewing one. Control's page shows **real** generated charts and real detector output for 5 analytes; every other sample type currently shows dummy placeholder data pending its detector's implementation.
+1. **Load a sample** (`index.html`) — pick a CSV export and choose **Use history** (the older half of the file's jobs becomes the history, the newer half is analysed; the history store is rebuilt each run) or **No history** (nothing stored; each job is only compared with earlier jobs in the same file). The server loads, validates and analyses the file.
+2. **Detector overview** (`summary.html`) — one card per detector (real Fail/Warning/Pass counts for Control), a per-job table with **Job** and **Instrument**, and a real-data table of the file's rows.
+3. **Detail** (`detail.html`) — one job at a time (job selector when the file has several): Job and Instrument, one button per `ANALYTE_CODE` coloured by its state, scheme tabs when an analyte was measured under two schemes, the reason for the state, the supporting numbers, and the LCS control chart.
 
 #### Running the proof of concept
 
-No installation needed — it's static files.
+```bash
+pip install -r requirements.txt
+python poc/server.py          # then open http://localhost:8000
+```
 
-1. Open `poc/index.html` directly in a browser (double-click it, or use an editor's "Open with Live Server").
-2. On the Load page, choose a CSV file to try — for example one of the fixtures in `data/samples/`, or a real export if you have one locally.
-3. Click **Analyse sample**, then **Continue to overview** to see which detectors are usable and browse the real data table.
-4. Click **View details** on any usable detector card to open its detail page.
+Choose a CSV (e.g. `data/raw/ResultSet.csv` or a file in `data/samples/`), click **Analyse sample**, **Continue to overview**, then **View details**. Opening the HTML files directly from disk only shows a notice: the analysis needs the server.
 
 ## Setup (for running the Python pipeline / notebooks / tests)
+
+Requires Python 3.10–3.13.
 
 ```bash
 pip install -r requirements.txt

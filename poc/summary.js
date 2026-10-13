@@ -1,24 +1,16 @@
 /**
- * summary.js — controller for the "Detector overview" page (summary.html).
+ * summary.js — controller for the "Detector overview" page (summary.html,
+ * Step 2).
  *
- * Reads the report load.js stored in sessionStorage (which detectors are
- * usable against the file the user chose on index.html), pairs each
- * detector with a dummy anomaly count from data.js (via
- * ranking.countBySeverity), and renders one card per detector. Only
- * detectors the load step found usable link through to their detail page
- * (detail.html?detector=<id>) — the same page built in Phase 1,
- * generalised in this step to work for any detector.
- *
- * Also renders a real-data table (rows.js/table.js) below the cards: up to
- * 15 real rows from the uploaded file, worst Detected-issue tag first,
- * filterable by sample type and tag. See rows.js's module docstring for
- * where the Detected-issue tag comes from and the storage/sampling design
- * that keeps this bounded regardless of source file size.
- *
- * PHASE 2 INTEGRATION POINT: countBySeverity(data.getItems(id)) below
- * would become a real per-detector anomaly count from that detector's
- * actual output, once each one exists — the card-rendering logic itself
- * would not need to change.
+ * Reads the report load.js stored (report-store.js) and renders:
+ *  - one card per detector: real FAIL/WARNING/PASS counts for detectors
+ *    analysed on the server (report.server.methods[id], shaped like
+ *    src/qc_report/contract.py's QCMethodResult summary), placeholder
+ *    counts for the rest;
+ *  - per server-analysed method, a table of its jobs with Job, Instrument(s)
+ *    and counts, each linking to that job on the detail page;
+ *  - the real-row table (rows.js/table.js) filterable by sample type,
+ *    company status and analyte.
  */
 (function () {
   "use strict";
@@ -26,66 +18,70 @@
   const rowFilterState = { type: "ALL", tag: "ALL", analyte: "ALL" };
 
   function summariseCounts(counts) {
-    const total = counts.CRITICAL + counts.HIGH + counts.MEDIUM + counts.NONE;
-    const flagged = counts.CRITICAL + counts.HIGH + counts.MEDIUM;
+    const total = counts.FAIL + counts.WARNING + counts.PASS;
     if (total === 0) {
-      return "No dummy items defined.";
+      return "No results.";
     }
-    if (flagged === 0) {
-      return "No anomalies detected (" + total + " item(s) checked).";
-    }
-    const parts = [];
-    if (counts.CRITICAL) parts.push(counts.CRITICAL + " Critical");
-    if (counts.HIGH) parts.push(counts.HIGH + " High");
-    if (counts.MEDIUM) parts.push(counts.MEDIUM + " Medium");
-    return flagged + " anomal" + (flagged === 1 ? "y" : "ies") + " detected (" + parts.join(", ") + ")";
+    return counts.FAIL + " fail, " + counts.WARNING + " warning, " + counts.PASS + " pass";
   }
 
-  function renderCard(detector, check) {
+  function detailLink(detectorId, jobKey) {
+    return "detail.html?detector=" + encodeURIComponent(detectorId) +
+      (jobKey !== undefined ? "&job=" + encodeURIComponent(jobKey) : "");
+  }
+
+  function addText(parent, tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) {
+      el.className = className;
+    }
+    el.textContent = text;
+    parent.appendChild(el);
+    return el;
+  }
+
+  function renderCard(detector, check, method) {
     const card = document.createElement("article");
-    card.className = "detector-card" + (check.usable ? "" : " detector-card-disabled");
+    const usable = method ? method.usable : check.usable;
+    card.className = "detector-card" + (usable ? "" : " detector-card-disabled");
 
-    const heading = document.createElement("h3");
-    heading.textContent = detector.label;
-    card.appendChild(heading);
+    addText(card, "h3", "", detector.label);
+    addText(card, "span", "usable-badge " + (usable ? "usable-yes" : "usable-no"), usable ? "Usable" : "Not usable");
 
-    const badge = document.createElement("span");
-    badge.className = "usable-badge " + (check.usable ? "usable-yes" : "usable-no");
-    badge.textContent = check.usable ? "Usable" : "Not usable";
-    card.appendChild(badge);
-
-    if (!check.validatorImplemented) {
-      const note = document.createElement("p");
-      note.className = "detector-card-note";
-      note.textContent = "Backend validator not implemented yet — best-effort check only.";
-      card.appendChild(note);
+    if (method) {
+      addText(card, "p", "detector-card-note", "Real analysis (history " + method.history_mode + ").");
+      if (usable) {
+        addText(card, "p", "detector-card-count",
+          summariseCounts(method.counts) + " across " + method.jobs.length + " job(s).");
+      }
+    } else if (detector.serverAnalysis) {
+      addText(card, "p", "detector-card-note",
+        "Real analysis unavailable: the local server did not analyse this file.");
+    } else {
+      addText(card, "p", "detector-card-note", "Not connected yet: placeholder data.");
+      addText(card, "p", "detector-card-count",
+        summariseCounts(window.LCSPoc.ranking.countByState(window.LCSPoc.data.getPlaceholderItems(detector.id))));
     }
 
-    const counts = window.LCSPoc.ranking.countBySeverity(window.LCSPoc.data.getItems(detector.id));
-    const countLine = document.createElement("p");
-    countLine.className = "detector-card-count";
-    countLine.textContent = summariseCounts(counts);
-    card.appendChild(countLine);
-
-    if (check.usable) {
+    if (usable && !(detector.serverAnalysis && !method)) {
       const link = document.createElement("a");
       link.className = "detector-card-button";
-      link.href = "detail.html?detector=" + encodeURIComponent(detector.id);
+      link.href = detailLink(detector.id);
       link.textContent = "View details ›";
       card.appendChild(link);
     } else {
-      const reason = document.createElement("p");
-      reason.className = "detector-card-reason";
       const bits = [];
-      if (check.missingColumns.length > 0) {
-        bits.push("Missing columns: " + check.missingColumns.join(", "));
+      if (method && method.notices && method.notices.length) {
+        bits.push(method.notices.join(" "));
+      } else {
+        if (check.missingColumns.length > 0) {
+          bits.push("Missing columns: " + check.missingColumns.join(", "));
+        }
+        if (check.matchingRowCount === 0) {
+          bits.push("No rows of this sample type in the loaded file.");
+        }
       }
-      if (check.matchingRowCount === 0) {
-        bits.push("No \"" + check.analyticalTypeFilter + "\" rows found in the loaded file.");
-      }
-      reason.textContent = bits.join(" ") || "Cannot run against the loaded file.";
-      card.appendChild(reason);
-
+      addText(card, "p", "detector-card-reason", bits.join(" ") || "Cannot run against the loaded file.");
       const disabledButton = document.createElement("button");
       disabledButton.type = "button";
       disabledButton.className = "detector-card-button";
@@ -100,13 +96,70 @@
   function renderCards(report) {
     const grid = document.getElementById("detector-grid");
     grid.textContent = "";
+    const methods = (report.server && report.server.methods) || {};
 
     window.LCSPoc.data.getDetectors().forEach(function (detector) {
       const check = report.checks.find(function (c) { return c.id === detector.id; });
       if (!check) {
         return; // report predates a detector added later — skip rather than crash
       }
-      grid.appendChild(renderCard(detector, check));
+      grid.appendChild(renderCard(detector, check, methods[detector.id]));
+    });
+  }
+
+  /** Per-method job table: Job, Instrument(s), first analysed, counts, link. */
+  function renderMethodResults(report) {
+    const container = document.getElementById("method-results");
+    container.textContent = "";
+    const methods = (report.server && report.server.methods) || {};
+
+    Object.keys(methods).forEach(function (methodId) {
+      const method = methods[methodId];
+      if (!method.usable || !method.jobs || method.jobs.length === 0) {
+        return;
+      }
+      const section = document.createElement("section");
+      section.className = "method-results";
+      addText(section, "h2", "", method.label + " — results by job");
+
+      const notices = document.createElement("ul");
+      notices.className = "notice-list";
+      (method.notices || []).forEach(function (text) { addText(notices, "li", "", text); });
+      section.appendChild(notices);
+
+      const scroll = document.createElement("div");
+      scroll.className = "job-table-scroll";
+      const table = document.createElement("table");
+      table.className = "job-table";
+      const headRow = document.createElement("tr");
+      ["Job", "Instrument", "First analysed", "Fail", "Warning", "Pass", ""].forEach(function (h) {
+        addText(headRow, "th", "", h);
+      });
+      const thead = document.createElement("thead");
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      method.jobs.forEach(function (job) {
+        const tr = document.createElement("tr");
+        addText(tr, "td", "", job.job);
+        addText(tr, "td", "", (job.instruments || []).join(", ") || "Instrument unknown");
+        addText(tr, "td", "", job.first_date || "");
+        ["FAIL", "WARNING", "PASS"].forEach(function (state) {
+          addText(tr, "td", "count-cell", String(job.counts[state] || 0));
+        });
+        const linkCell = document.createElement("td");
+        const link = document.createElement("a");
+        link.href = detailLink(methodId, job.key);
+        link.textContent = "View ›";
+        linkCell.appendChild(link);
+        tr.appendChild(linkCell);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      scroll.appendChild(table);
+      section.appendChild(scroll);
+      container.appendChild(section);
     });
   }
 
@@ -122,12 +175,8 @@
     if (!report.rowSample.hasAnalyteCodeColumn) {
       notes.push("No ANALYTE_CODE column was found — analyte filtering has nothing to go on.");
     }
-    if (notes.length > 0) {
-      noteEl.hidden = false;
-      noteEl.textContent = notes.join(" ");
-    } else {
-      noteEl.hidden = true;
-    }
+    noteEl.hidden = notes.length === 0;
+    noteEl.textContent = notes.join(" ");
   }
 
   function refreshRowTable(report) {
@@ -168,7 +217,11 @@
 
   function render(report) {
     document.getElementById("summary-file-name").textContent = report.fileName;
+    document.getElementById("summary-history").textContent = report.server
+      ? (report.server.history_mode === "on" ? "on" : "off")
+      : "not analysed";
     renderCards(report);
+    renderMethodResults(report);
     initRowSampleSection(report);
   }
 

@@ -3,6 +3,7 @@ ANALYTICAL_TYPE,analytical_type,str,true
 QC_TYPE,qc_type,str,false
 STD_LOT_CODE,std_lot_code,str,false
 STD_CODE,std_code,str,false
+JOB_NAME_ANON,job_code,str,false
 JOB_CODE,job_code,str,false
 NUMERIC_FINAL_VALUE,measured_value,float,true
 ANALYSED_DATE,analysed_date,datetime,true
@@ -26,8 +27,8 @@ INTERNAL_TARGET_VALUE,target_value,float,false
 PARENT_NUMERIC_FINAL_VALUE,parent_value,float,false
 UNIT_CODE,unit_code,str,true
 SPECIFICATION_CODE,specification_code,str,false
-INSTRUMENT_ID,instrument_id,str,false
 INSTRUMENT_CODE,instrument_id,str,false
+INSTRUMENT_ID,instrument_id,str,false
 ABSDIFF,abs_diff,float,false
 AVG,avg_value,float,false
 ABS%DIFF,abs_pct_diff,float,false

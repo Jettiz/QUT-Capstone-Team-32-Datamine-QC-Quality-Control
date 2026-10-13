@@ -1,44 +1,28 @@
 /**
- * load.js — controller for the "Load a sample" page (index.html).
+ * load.js — controller for the "Load a sample" page (index.html, Step 1).
  *
- * Reads a REAL local CSV the user picks (File API, no backend, no upload
- * anywhere) and runs a simplified, client-side stand-in for what
- * src/data_loader.py + src/data_validator.py do on the real pipeline:
- *   - data_loader.load_qc_data() reads the file and normalises column
- *     names to uppercase (this file's parseHeader() mirrors that).
- *   - each validate_*_data(df) function in src/data_validator.py filters
- *     to that sample type's ANALYTICAL_TYPE and checks its required
- *     columns are present (this file's checkDetector() mirrors that, at
- *     header/row-count level only -- no null/dtype checks, unlike the
- *     real validators).
- * It also samples real rows (via rows.js) for the Overview/Detail pages'
- * data tables -- see scanDataLines()'s docstring for how that's kept
- * bounded regardless of file size.
+ * On "Analyse sample" two things happen in parallel:
+ *  1. REAL analysis: the file is uploaded to poc/server.py (api.js), which
+ *     loads it with src/data_loader.py, validates it with
+ *     src/data_validator.py and runs every QC method registered in
+ *     src/qc_report/registry.py (currently LCS / Control), using the History
+ *     toggle on this page. The returned run summary is stored with the
+ *     report (report.server) for Steps 2 and 3.
+ *  2. Browser-side PREVIEW: the file is read locally (File API) for the
+ *     "which detectors can use this data?" table and the real-row tables.
+ *     For detectors analysed on the server, the server's real validation
+ *     replaces the preview's verdict; for the others the preview is a
+ *     simplified stand-in for their validator (column presence + at least
+ *     one row of the right type -- no null/dtype checks).
  *
- * PHASE 2 INTEGRATION POINT: analyseFile()/checkDetector() below is what
- * would be replaced by an actual call into data_loader.py/data_validator.py
- * (via a real backend) if this ever stops being a client-only POC. The
- * report object shape this produces (see buildReport()) is deliberately
- * close to what those real functions return
- * (status/n_rows/missing_columns) so that swap would be small.
- *
- * Limitations, deliberately kept simple for a POC:
+ * Limitations of the preview, deliberately kept simple:
  * - CSV rows are split on a plain "," -- a field containing an embedded
- *   comma would misalign columns. None of the columns this check reads
- *   (ANALYTICAL_TYPE, and the required-column headers themselves) are
+ *   comma would misalign columns. None of the columns this reads are
  *   expected to contain one in real CCLAS exports.
- * - Only the first MAX_ROWS_SCANNED data rows are scanned for the
- *   ANALYTICAL_TYPE row-count check and the row-sample table, capped at
- *   MAX_ROWS_SCANNED as a safety ceiling against a pathologically huge file
- *   freezing the browser tab -- NOT tuned down for "typical" files. A real
- *   99,999-row/16.7MB CCLAS export (data/raw/ResultSet.csv) scans in well
- *   under a second, and its sample types are NOT evenly interleaved
- *   (Duplicate rows in particular are clustered later in the file), so a
- *   cap much smaller than this would silently under-count or miss a real
- *   sample type entirely -- confirmed by hand against that exact file
- *   before landing on this value.
- * - No null-value or dtype checking (unlike the real validators) -- this
- *   only checks column presence + at least one row of the right sample type.
+ * - Only the first MAX_ROWS_SCANNED data rows are scanned, as a safety
+ *   ceiling against a pathologically huge file freezing the tab. A real
+ *   99,999-row/16.7MB export scans in well under a second; sample types are
+ *   NOT evenly interleaved in real exports, so this must not be tuned down.
  */
 (function () {
   "use strict";
@@ -51,8 +35,7 @@
       lines.pop();
     }
     // Some real CCLAS exports (e.g. data/raw/ResultSet.csv) start with a
-    // blank line before the real header -- skip any leading blank lines too,
-    // or the header row would be misread as a single empty-string column.
+    // blank line before the real header -- skip any leading blank lines too.
     while (lines.length && lines[0].trim() === "") {
       lines.shift();
     }
@@ -70,15 +53,11 @@
     return splitCsvLine(firstLine).map(function (c) { return c.toUpperCase(); });
   }
 
-  /**
-   * Resolves the column indexes rows.js needs for row classification, or -1
-   * if a given column isn't present in this file's header at all.
-   * @param {Array<string>} header
-   */
   function resolveColumnIndexes(header) {
     const names = window.LCSPoc.rows.COLUMN_NAMES;
     return {
       analyticalType: header.indexOf(names.analyticalType),
+      stdLotCode: header.indexOf(names.stdLotCode),
       standardStatus: header.indexOf(names.standardStatus),
       precisionStatus: header.indexOf(names.precisionStatus),
       analyteCode: header.indexOf(names.analyteCode),
@@ -86,23 +65,13 @@
   }
 
   /**
-   * Single pass over the file's data lines: splits each line once (rather
-   * than once per detector, as a naive per-detector scan would), and in the
-   * same loop both (a) counts how many rows match each detector's
-   * analyticalTypeFilter, and (b) classifies + samples each row for the
-   * row-data tables (see rows.js's createRowSampler() for the bounded
-   * sampling strategy that keeps this small regardless of file size).
-   * @param {Array<string>} header
-   * @param {Array<string>} dataLines
-   * @param {Array<Object>} detectors from data.js's getDetectors()
-   * @returns {{matchingCounts: Object<string, number|null>, hasAnalyticalTypeColumn: boolean, hasStandardStatusColumn: boolean, hasPrecisionStatusColumn: boolean, scanLimit: number, rowSample: Object}}
+   * Single pass over the file's data lines: classifies each row once (type
+   * incl. the LCS/SRM split, company-status tag, analyte), counts rows per
+   * detector rowType and samples rows for the tables (rows.js).
    */
   function scanDataLines(header, dataLines, detectors) {
     const colIdx = resolveColumnIndexes(header);
     const hasAnalyticalTypeColumn = colIdx.analyticalType !== -1;
-    const hasStandardStatusColumn = colIdx.standardStatus !== -1;
-    const hasPrecisionStatusColumn = colIdx.precisionStatus !== -1;
-    const hasAnalyteCodeColumn = colIdx.analyteCode !== -1;
 
     const matchingCounts = {};
     detectors.forEach(function (d) {
@@ -115,16 +84,17 @@
     for (let i = 0; i < scanLimit; i++) {
       const fields = splitCsvLine(dataLines[i]);
 
+      const canonicalType = window.LCSPoc.rows.classifyRowType(
+        fields[colIdx.analyticalType], colIdx.stdLotCode !== -1 ? fields[colIdx.stdLotCode] : ""
+      );
       if (hasAnalyticalTypeColumn) {
-        const rawType = (fields[colIdx.analyticalType] || "").toUpperCase();
         detectors.forEach(function (d) {
-          if (rawType === d.analyticalTypeFilter.toUpperCase()) {
+          if (canonicalType === d.rowType) {
             matchingCounts[d.id] += 1;
           }
         });
       }
 
-      const canonicalType = window.LCSPoc.rows.classifyRowType(fields[colIdx.analyticalType]);
       const standardStatusRaw = colIdx.standardStatus !== -1 ? fields[colIdx.standardStatus] : "";
       const precisionStatusRaw = colIdx.precisionStatus !== -1 ? fields[colIdx.precisionStatus] : "";
       const analyteCodeRaw = colIdx.analyteCode !== -1 ? fields[colIdx.analyteCode] : "";
@@ -136,38 +106,58 @@
     return {
       matchingCounts: matchingCounts,
       hasAnalyticalTypeColumn: hasAnalyticalTypeColumn,
-      hasStandardStatusColumn: hasStandardStatusColumn,
-      hasPrecisionStatusColumn: hasPrecisionStatusColumn,
-      hasAnalyteCodeColumn: hasAnalyteCodeColumn,
+      hasStandardStatusColumn: colIdx.standardStatus !== -1,
+      hasPrecisionStatusColumn: colIdx.precisionStatus !== -1,
+      hasAnalyteCodeColumn: colIdx.analyteCode !== -1,
       scanLimit: scanLimit,
       rowSample: sampler.build(),
     };
   }
 
   /**
-   * Pure check: given a detector's required columns and its precomputed
-   * matching-row count (from scanDataLines(), not re-scanned here), decides
-   * usability. No file scanning happens in this function.
-   * @param {Object} detector
-   * @param {Array<string>} header
-   * @param {number|null} matchingRowCount
+   * Preview check for one detector: required columns present ("A|B" = either
+   * alias) and at least one row of its rowType. No file scanning here.
    */
   function checkDetector(detector, header, matchingRowCount) {
-    const missingColumns = detector.requiredColumns.filter(function (col) {
-      return header.indexOf(col) === -1;
-    });
-
-    const usable = missingColumns.length === 0 && (matchingRowCount === null || matchingRowCount > 0);
+    const missingColumns = detector.requiredColumns.filter(function (spec) {
+      return !spec.split("|").some(function (col) { return header.indexOf(col) !== -1; });
+    }).map(function (spec) { return spec.split("|").join(" or "); });
 
     return {
       id: detector.id,
       label: detector.label,
       validatorImplemented: detector.validatorImplemented,
-      analyticalTypeFilter: detector.analyticalTypeFilter,
+      rowType: detector.rowType,
       missingColumns: missingColumns,
       matchingRowCount: matchingRowCount,
-      usable: usable,
+      usable: missingColumns.length === 0 && (matchingRowCount === null || matchingRowCount > 0),
+      source: "preview",
+      notes: [],
     };
+  }
+
+  /**
+   * For detectors analysed on the server, its real validation decides
+   * usability (src/data_validator.py on the loader's internal columns).
+   */
+  function applyServerValidation(checks, server) {
+    if (!server || !server.methods) {
+      return checks;
+    }
+    return checks.map(function (check) {
+      const method = server.methods[check.id];
+      if (!method) {
+        return check;
+      }
+      const v = method.validation || {};
+      return Object.assign({}, check, {
+        usable: !!method.usable,
+        missingColumns: v.missing_columns || [],
+        matchingRowCount: typeof v.n_rows === "number" ? v.n_rows : check.matchingRowCount,
+        source: "server",
+        notes: method.notices || [],
+      });
+    });
   }
 
   function buildReport(fileName, text) {
@@ -192,6 +182,7 @@
       columns: header,
       checks: checks,
       analysedAt: new Date().toISOString(),
+      server: null,
       rowSample: Object.assign(scan.rowSample, {
         hasAnalyticalTypeColumn: scan.hasAnalyticalTypeColumn,
         hasStandardStatusColumn: scan.hasStandardStatusColumn,
@@ -201,12 +192,19 @@
     };
   }
 
+  function typeLabel(rowType) {
+    return window.LCSPoc.rows.TYPE_LABELS[rowType] || rowType;
+  }
+
   function renderReport(report) {
     const summary = document.getElementById("load-summary");
     summary.hidden = false;
     summary.querySelector("[data-field='file-name']").textContent = report.fileName;
     summary.querySelector("[data-field='row-count']").textContent = report.nRows.toLocaleString();
     summary.querySelector("[data-field='column-count']").textContent = report.columns.length;
+    summary.querySelector("[data-field='history-mode']").textContent = report.server
+      ? (report.server.history_mode === "on" ? "On (older half of the jobs used as history)" : "Off (no history stored)")
+      : "Not analysed (server unavailable)";
 
     const tbody = document.getElementById("detector-check-body");
     tbody.textContent = "";
@@ -227,18 +225,16 @@
 
       const detailCell = document.createElement("td");
       const notes = [];
-      if (!check.validatorImplemented) {
-        notes.push("Backend validator not implemented yet — best-effort column check only.");
-      }
+      notes.push(check.source === "server"
+        ? "Validated and analysed on the server."
+        : "Browser preview only (placeholder results).");
       if (check.missingColumns.length > 0) {
-        notes.push("Missing columns: " + check.missingColumns.join(", "));
+        notes.push("Missing columns: " + check.missingColumns.join(", ") + ".");
       }
       if (check.matchingRowCount === null) {
         notes.push("Could not check row type (no ANALYTICAL_TYPE column found).");
-      } else if (check.matchingRowCount === 0) {
-        notes.push("No \"" + check.analyticalTypeFilter + "\" rows found.");
       } else {
-        notes.push(check.matchingRowCount.toLocaleString() + " \"" + check.analyticalTypeFilter + "\" row(s) found.");
+        notes.push(check.matchingRowCount.toLocaleString() + " row(s) of type \"" + typeLabel(check.rowType) + "\".");
       }
       detailCell.textContent = notes.join(" ");
       row.appendChild(detailCell);
@@ -259,6 +255,28 @@
     errorBox.textContent = "";
   }
 
+  function setStatus(message) {
+    const el = document.getElementById("load-status");
+    el.hidden = !message;
+    el.textContent = message || "";
+  }
+
+  function readAsText(file) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onerror = function () {
+        reject(new Error("Could not read \"" + file.name + "\". Please choose a valid, readable file."));
+      };
+      reader.onload = function (event) { resolve(String(event.target.result || "")); };
+      reader.readAsText(file);
+    });
+  }
+
+  function useHistory() {
+    const checked = document.querySelector("input[name='history-mode']:checked");
+    return !checked || checked.value !== "off";
+  }
+
   let lastReport = null;
 
   function handleAnalyseClick() {
@@ -269,29 +287,42 @@
 
     const input = document.getElementById("sample-file");
     if (!input.files || input.files.length === 0) {
-      showError("Please choose a CSV file first.");
+      showError("Please choose a file first.");
       return;
     }
 
     const file = input.files[0];
-    const reader = new FileReader();
+    if (!/\.csv$/i.test(file.name)) {
+      showError("Please choose a CSV export (.csv).");
+      return;
+    }
+    const analyseButton = document.getElementById("analyse-button");
+    analyseButton.disabled = true;
+    setStatus("Analysing " + file.name + "… (large files can take a few seconds)");
 
-    reader.onerror = function () {
-      showError("Could not read \"" + file.name + "\". Please choose a valid, readable CSV file.");
-    };
+    // A server failure doesn't block the preview -- it is reported instead.
+    const serverPromise = window.LCSPoc.api.analyse(file, useHistory()).then(
+      function (summary) { return { summary: summary, error: null }; },
+      function (err) { return { summary: null, error: err }; }
+    );
 
-    reader.onload = function (event) {
-      try {
-        const text = String(event.target.result || "");
-        lastReport = buildReport(file.name, text);
-        renderReport(lastReport);
-        document.getElementById("continue-button").disabled = false;
-      } catch (err) {
-        showError("Could not analyse \"" + file.name + "\": " + err.message);
+    Promise.all([readAsText(file), serverPromise]).then(function (results) {
+      const server = results[1];
+      const report = buildReport(file.name, results[0]);
+      report.server = server.summary;
+      report.checks = applyServerValidation(report.checks, server.summary);
+      lastReport = report;
+      renderReport(report);
+      if (server.error) {
+        showError("Real analysis unavailable: " + server.error.message);
       }
-    };
-
-    reader.readAsText(file);
+      document.getElementById("continue-button").disabled = false;
+    }).catch(function (err) {
+      showError("Could not analyse \"" + file.name + "\": " + err.message);
+    }).then(function () {
+      analyseButton.disabled = false;
+      setStatus("");
+    });
   }
 
   function handleContinueClick() {
@@ -307,6 +338,7 @@
   }
 
   function init() {
+    document.getElementById("server-banner").hidden = window.LCSPoc.api.isServed();
     document.getElementById("analyse-button").addEventListener("click", handleAnalyseClick);
     document.getElementById("continue-button").addEventListener("click", handleContinueClick);
   }

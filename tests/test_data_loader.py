@@ -77,6 +77,52 @@ def test_instrument_id_and_instrument_code_both_map_to_instrument_id(tmp_path):
     assert df2["instrument_id"].tolist() == ["INS-2"]
 
 
+def test_aliases_are_coalesced_in_config_order_when_both_are_present(tmp_path):
+    # Row order in column_config.csv is the priority: JOB_NAME_ANON first,
+    # JOB_CODE only where the preferred column is missing/blank.
+    config_path = _write_config(tmp_path, [
+        ("ANALYTE_CODE", "analyte_code", "str", "true"),
+        ("JOB_NAME_ANON", "job_code", "str", "false"),
+        ("JOB_CODE", "job_code", "str", "false"),
+        ("INSTRUMENT_CODE", "instrument_id", "str", "false"),
+        ("INSTRUMENT_ID", "instrument_id", "str", "false"),
+    ])
+    data_path = _write_csv(tmp_path, "both.csv", pd.DataFrame({
+        "ANALYTE_CODE": ["Cu", "Zn", "Pb"],
+        "JOB_NAME_ANON": ["JOB_A", "", None],
+        "JOB_CODE": ["TSV_1", "TSV_2", None],
+        "INSTRUMENT_CODE": [None, "ICP-2", "  "],
+        "INSTRUMENT_ID": ["INS-1", "INS-X", None],
+    }))
+
+    df = load_qc_data(data_path=data_path, config_path=config_path)
+
+    assert list(df.columns) == ["analyte_code", "job_code", "instrument_id"]  # no duplicate columns
+    assert df["job_code"].tolist()[:2] == ["JOB_A", "TSV_2"]
+    assert pd.isna(df["job_code"].iloc[2])
+    assert df["instrument_id"].tolist()[:2] == ["INS-1", "ICP-2"]
+    assert pd.isna(df["instrument_id"].iloc[2])
+
+
+def test_real_column_config_prefers_job_name_and_instrument_code():
+    config = pd.read_csv(Path(__file__).resolve().parent.parent / "config" / "column_config.csv")
+    order = config["source_column"].tolist()
+    assert order.index("JOB_NAME_ANON") < order.index("JOB_CODE")
+    assert order.index("INSTRUMENT_CODE") < order.index("INSTRUMENT_ID")
+    mapping = dict(zip(config["source_column"], config["internal_column"]))
+    assert mapping["JOB_NAME_ANON"] == mapping["JOB_CODE"] == "job_code"
+    assert mapping["INSTRUMENT_CODE"] == mapping["INSTRUMENT_ID"] == "instrument_id"
+
+
+def test_importing_the_loader_has_no_side_effects():
+    import subprocess
+    import sys
+    code = ("import time, pandas; t = time.time(); import src.data_loader as m; "
+            "assert not hasattr(m, 'qc_data'), 'module loaded data on import'")
+    subprocess.run([sys.executable, "-c", code], check=True,
+                   cwd=Path(__file__).resolve().parent.parent)
+
+
 # ── _derive_precision_metrics(): rpd/mean_conc derivation ───────────────────
 
 def test_derive_precision_metrics_matches_notebook_formula():

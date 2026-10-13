@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Detector Overview — Proof of Concept</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -18,8 +19,8 @@
   <header class="page-header">
     <h1>Detector Overview</h1>
     <p class="subtitle">
-      Each card below is one QC detector; anomaly counts are dummy data (Phase 1),
-      but usability reflects the real column/row check from the file you loaded.
+      One card per QC detector. Detectors connected to the local server show real results
+      (Fail / Warning / Pass per analyte); the others show placeholder data.
     </p>
   </header>
 
@@ -29,19 +30,24 @@
     </p>
 
     <div id="summary-content">
-      <p class="subtitle">Loaded file: <strong id="summary-file-name"></strong></p>
+      <p class="subtitle">
+        Loaded file: <strong id="summary-file-name"></strong> &middot; History: <strong id="summary-history"></strong>
+      </p>
       <div id="detector-grid" class="detector-grid"></div>
+
+      <div id="method-results"></div>
 
       <section id="row-sample-section" class="row-sample-section">
         <h2>Sample data rows</h2>
         <p class="subtitle">
-          Showing up to 15 real rows from the loaded file, worst issue first.
+          Up to 15 rows from the loaded file, worst company status first (the company's existing
+          STANDARD_STATUS / PRECISION_STATUS check, not this project's analysis).
         </p>
         <p id="row-sample-note" class="row-sample-note" hidden></p>
         <div class="row-filters">
           <label for="row-type-filter">Sample type</label>
           <select id="row-type-filter"></select>
-          <label for="row-tag-filter">Detected issue</label>
+          <label for="row-tag-filter">Company status</label>
           <select id="row-tag-filter"></select>
           <label for="row-analyte-filter">Analyte</label>
           <select id="row-analyte-filter"></select>

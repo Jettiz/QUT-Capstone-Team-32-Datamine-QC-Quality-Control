@@ -10,10 +10,9 @@ window.LCSPoc.table = (function () {
   "use strict";
 
   /**
-   * Maps a row tag to the same lowercase CSS class suffix render.js's
-   * severityClass() uses, so tag badges reuse the existing
-   * .severity-badge.severity-* palette. "pass"/"unknown" are new suffixes
-   * this feature adds to style.css.
+   * Maps a row tag (FAIL / WARNING / PASS / UNKNOWN) to the same lowercase
+   * CSS class suffix render.js's stateClass() uses, so tag badges reuse the
+   * .state-badge.state-* palette.
    * @param {string} tag one of rows.js's TAGS
    * @returns {string}
    */
@@ -182,7 +181,7 @@ window.LCSPoc.table = (function () {
     const thead = document.createElement("thead");
     const headRow = document.createElement("tr");
     const issueHeader = document.createElement("th");
-    issueHeader.textContent = "Detected issue";
+    issueHeader.textContent = "Company status";
     headRow.appendChild(issueHeader);
     columns.forEach(function (col) {
       const th = document.createElement("th");
@@ -208,7 +207,7 @@ window.LCSPoc.table = (function () {
 
         const issueCell = document.createElement("td");
         const badge = document.createElement("span");
-        badge.className = "severity-badge severity-" + tagClass(record.tag);
+        badge.className = "state-badge state-" + tagClass(record.tag);
         badge.textContent = window.LCSPoc.rows.TAG_LABELS[record.tag] || record.tag;
         issueCell.appendChild(badge);
         tr.appendChild(issueCell);
